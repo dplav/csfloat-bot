@@ -53,7 +53,7 @@ def is_good_deal(item):
     if "Butterfly Knife | Ultraviolet" in name and item["item"]["wear"] == "Field-Tested":
         if market > 0:
             discount = (market - price) / market * 100
-            return 1.5 <= discount <= 2.0
+            return 1.0 <= discount <= 2.0
 
     if "Butterfly Knife | Freehand" in name:
         wear = item["item"]["float_value"]
@@ -85,3 +85,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

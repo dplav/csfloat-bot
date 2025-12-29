@@ -4,25 +4,19 @@ import time
 import sys
 from datetime import datetime
 
-# Force l'affichage des logs
 sys.stdout.reconfigure(line_buffering=True)
 
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = "6116293616"
-CSFLOAT_API_KEY = os.getenv("CSFLOAT_API_KEY")
-
-USD_TO_EUR = 0.95
+# .strip() est vital pour éviter d'envoyer un espace dans l'en-tête Authorization
+CSFLOAT_API_KEY = os.getenv("CSFLOAT_API_KEY").strip() if os.getenv("CSFLOAT_API_KEY") else ""
 
 def is_good_deal(name, price_eur, wear):
-    # On vérifie que c'est bien un Butterfly Knife et qu'il est FT
     if "Field-Tested" not in name:
         return False
-        
     is_uv = "Ultraviolet" in name
     is_stained = "Stained" in name
-    
-    # Seuils avec tolérance +5€
     if is_uv:
         if price_eur <= 525: return True
         if wear <= 0.16 and price_eur <= 585: return True
@@ -31,64 +25,57 @@ def is_good_deal(name, price_eur, wear):
     return False
 
 def scan_csfloat():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan CSFloat (Turbo 100 items)...")
-    headers = {"Authorization": CSFLOAT_API_KEY.strip() if CSFLOAT_API_KEY else ""}
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan CSFloat (URL Directe)...")
     
-    # On augmente la limite à 100 pour balayer plus large
-    params = {
-        "limit": 100, 
-        "full_text": "Butterfly Knife",
-        "sort_by": "most_recent"
+    headers = {
+        "Authorization": CSFLOAT_API_KEY,
+        "User-Agent": "Mozilla/5.0" # Ajout d'un User-Agent pour éviter le blocage
     }
     
+    # URL brute avec les filtres déjà encodés (Butterfly + Most Recent + Limit 50)
+    url = "https://csfloat.com/api/v1/listings?limit=50&sort_by=most_recent&type=butterfly_knife"
+    
     try:
-        r = requests.get("https://csfloat.com/api/v1/listings", headers=headers, params=params, timeout=15)
+        r = requests.get(url, headers=headers, timeout=15)
+        
         if r.status_code == 200:
-            items = r.json().get("data", [])
+            data = r.json()
+            # Si le JSON est dans une clé 'data'
+            items = data.get("data", data) if isinstance(data, dict) else data
+            
             count, deals = 0, 0
-            found_names = []
-            
             for i in items:
-                name = i['item']['market_hash_name']
-                if "Ultraviolet" in name or "Stained" in name:
-                    count += 1
-                    price = i['price'] / 100
-                    wear = i['item'].get('float_value', 0.0)
-                    
-                    # On garde trace de ce qu'on a vu pour les logs
-                    found_names.append(f"{name.replace('Butterfly Knife | ', '')} ({price:.0f}€)")
-                    
-                    if is_good_deal(name, price, wear):
-                        deals += 1
-                        send_alert(name, price, wear, f"https://csfloat.com/item/{i['id']}", "CSFloat")
-            
-            # Affichage des skins cibles trouvés dans le scan actuel
-            if found_names:
-                print(f"   └─ 👀 Vus : {', '.join(list(set(found_names)))}")
-            
-            print(f"   └─ ✅ {len(items)} Butterfly scannés | {count} cibles trouvées | {deals} deal")
+                try:
+                    name = i['item']['market_hash_name']
+                    if "Ultraviolet" in name or "Stained" in name:
+                        count += 1
+                        price = i['price'] / 100
+                        wear = i['item'].get('float_value', 0.0)
+                        if is_good_deal(name, price, wear):
+                            deals += 1
+                            send_alert(name, price, wear, f"https://csfloat.com/item/{i['id']}", "CSFloat")
+                except KeyError:
+                    continue
+            print(f"   └─ ✅ {len(items)} items reçus | {count} cibles analysées | {deals} deal")
+        
+        elif r.status_code == 401:
+            print("❌ Erreur 401 : Ta clé API CSFloat est invalide ou mal copiée.")
         else:
-            print(f"❌ CSFloat Error {r.status_code}")
+            print(f"❌ CSFloat Error {r.status_code}: {r.text[:100]}")
+            
     except Exception as e:
-        print(f"⚠️ Erreur CSFloat: {e}")
+        print(f"⚠️ Erreur technique : {e}")
 
 def send_alert(name, price, wear, url, source):
-    print(f"🎯 ALERTE ENVOYÉE : {name} à {price}€")
-    msg = (f"🎯 *ALERTE {source.upper()} !*\n\n"
-           f"🔪 *{name}*\n"
-           f"💰 *Prix : {price:.2f}€*\n"
-           f"📉 *Float :* `{wear:.5f}`\n\n"
-           f"🔗 [VOIR L'OFFRE]({url})")
+    msg = (f"🎯 *ALERTE {source} !*\n\n🔪 *{name}*\n💰 *{price:.2f}€*\n📉 *Float:* `{wear:.5f}`\n\n🔗 [VOIR L'OFFRE]({url})")
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
                   json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 def main():
-    print("🚀 Sniper v11.0 (CSFloat Turbo Mode)")
-    print("Cibles : UV FT (<=525€ ou <=585€ si float <0.16) | Stained FT (<=550€)")
+    print("🚀 Sniper v12.0 (Mode URL Directe)")
     while True:
         scan_csfloat()
-        # On réduit l'attente à 30 secondes pour être plus réactif
-        time.sleep(30)
+        time.sleep(35)
 
 if __name__ == "__main__":
     main()

@@ -4,116 +4,110 @@ import time
 import sys
 from datetime import datetime
 
-# Force l'affichage des logs immédiatement sur Railway
 sys.stdout.reconfigure(line_buffering=True)
 
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = "6116293616"  # Ton ID fixé en dur pour plus de simplicité
+TELEGRAM_CHAT_ID = "6116293616"
 CSFLOAT_API_KEY = os.getenv("CSFLOAT_API_KEY")
-
 HEADERS = {"Authorization": CSFLOAT_API_KEY}
-# Variable globale pour garder l'ID en mémoire pendant que le bot tourne
-CURRENT_MSG_ID = None
+
+# Les skins que tu acceptes
+SKINS_INTERESSANTS = ["Ultraviolet", "Freehand", "Case Hardened"]
 
 def update_status(text):
-    """Gère le message de suivi unique sans variable externe"""
-    global CURRENT_MSG_ID
-    base_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-    
-    # Si on n'a pas encore l'ID du message pour ce cycle
-    if not CURRENT_MSG_ID:
-        url = f"{base_url}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
-        r = requests.post(url, json=payload).json()
-        if r.get("ok"):
-            CURRENT_MSG_ID = r["result"]["message_id"]
-    else:
-        # On essaie d'éditer le message existant
-        url = f"{base_url}/editMessageText"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "message_id": CURRENT_MSG_ID, "text": text, "parse_mode": "Markdown"}
-        r = requests.post(url, json=payload).json()
-        # Si le message a été supprimé, on en crée un nouveau au prochain tour
-        if not r.get("ok"):
-            CURRENT_MSG_ID = None
-            update_status(text)
+    """Envoie un message de suivi silencieux"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID, 
+        "text": text, 
+        "parse_mode": "Markdown", 
+        "disable_notification": True
+    }
+    return requests.post(url, json=payload).json().get("result", {}).get("message_id")
 
-def send_alert(text, image_url=None):
-    """Envoie une alerte qui fait vibrer le téléphone"""
-    base_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-    try:
-        if image_url:
-            requests.post(f"{base_url}/sendPhoto", json={"chat_id": TELEGRAM_CHAT_ID, "photo": image_url, "caption": text, "parse_mode": "Markdown"}, timeout=10)
-        else:
-            requests.post(f"{base_url}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=10)
-    except Exception as e:
-        print(f"❌ Erreur envoi alerte : {e}")
+def delete_message(msg_id):
+    """Supprime l'ancien message de statut pour garder le chat propre"""
+    if msg_id:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage"
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "message_id": msg_id})
 
 def is_good_deal(item):
-    """Ta stratégie de prix personnalisée"""
     name = item.get("item", {}).get("market_hash_name", "")
     price = item.get("price", 0) / 100
     wear = item.get("item", {}).get("float_value", 1.0)
     
-    # 1. Butterfly Ultraviolet
-    if "Butterfly Knife | Ultraviolet" in name:
-        if "Field-Tested" in name and price <= 515: return True
-        if "Field-Tested" in name and wear <= 0.16 and price <= 580: return True
+    # On ne garde que tes 3 skins
+    if not any(s in name for s in SKINS_INTERESSANTS):
+        return False
+
+    # Logique de prix
+    if "Ultraviolet" in name:
+        if "Field-Tested" in name and (price <= 515 or (wear <= 0.16 and price <= 580)): return True
         if "Minimal Wear" in name and price <= 600: return True
 
-    # 2. Butterfly Freehand
-    if "Butterfly Knife | Freehand" in name:
+    if "Freehand" in name:
         if "Factory New" in name and price <= 600: return True
         if "Minimal Wear" in name and price <= 570: return True
 
-    # 3. Butterfly Case Hardened
     if "Case Hardened" in name:
-        if price <= 540: return True
-        if item.get("item", {}).get("is_blue_gem", False): return True
+        if price <= 540 or item.get("item", {}).get("is_blue_gem", False): return True
                 
     return False
 
 def run_scan():
-    """Scan des 30 derniers items par skin"""
-    queries = [
-        "Butterfly Knife | Ultraviolet",
-        "Butterfly Knife | Freehand",
-        "Butterfly Knife | Case Hardened"
-    ]
-    
-    for q in queries:
-        try:
-            # Limite à 30 pour couvrir les pauses du bot
-            params = {"limit": 30, "market_hash_name": q, "sort_by": "most_recent"}
-            r = requests.get("https://csfloat.com/api/v1/listings", headers=HEADERS, params=params, timeout=10)
+    # On récupère les 50 derniers Butterfly du marché
+    params = {
+        "limit": 50, 
+        "market_hash_name": "Butterfly Knife",
+        "sort_by": "most_recent"
+    }
+    try:
+        r = requests.get("https://csfloat.com/api/v1/listings", headers=HEADERS, params=params, timeout=10)
+        if r.status_code == 200:
+            items = r.json().get("data", [])
+            # On filtre pour les logs
+            targets = [i for i in items if any(s in i['item']['market_hash_name'] for s in SKINS_INTERESSANTS)]
+            print(f"🔎 {len(targets)} Butterfly (UV/Freehand/CH) trouvés sur les 50 derniers mis en ligne.")
             
-            if r.status_code == 200:
-                items = r.json().get("data", [])
-                print(f"🔎 {q} : {len(items)} items vérifiés.")
-                for item in items:
-                    if is_good_deal(item):
-                        msg = (f"🔥 *AFFAIRE TROUVÉE !*\n\n"
-                               f"🔪 *{item['item']['market_hash_name']}*\n"
-                               f"💰 *Prix : {item['price']/100}€*\n"
-                               f"📉 *Float :* `{item['item']['float_value']:.5f}`\n\n"
-                               f"🔗 [Acheter sur CSFloat](https://csfloat.com/item/{item['id']})")
-                        img = item['item'].get('screenshot', item['item'].get('image'))
-                        send_alert(msg, image_url=img)
-        except Exception as e:
-            print(f"⚠️ Erreur sur {q} : {e}")
+            for item in items:
+                if is_good_deal(item):
+                    send_alert(item)
+        else:
+            print(f"❌ Erreur API : {r.status_code}")
+    except Exception as e:
+        print(f"⚠️ Erreur : {e}")
+
+def send_alert(item):
+    name = item['item']['market_hash_name']
+    price = item['price'] / 100
+    img = item['item'].get('screenshot', item['item'].get('image'))
+    url = f"https://csfloat.com/item/{item['id']}"
+    
+    msg = (f"🎯 *AUBAINE DÉTECTÉE !*\n\n"
+           f"🔪 *{name}*\n"
+           f"💰 *Prix : {price}€*\n"
+           f"📉 *Float :* `{item['item']['float_value']:.5f}`\n\n"
+           f"🔗 [VOIR SUR CSFLOAT]({url})")
+    
+    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", 
+                  json={"chat_id": TELEGRAM_CHAT_ID, "photo": img, "caption": msg, "parse_mode": "Markdown"})
 
 def main():
-    print("🚀 Démarrage du cycle de scan...")
-    # 6 répétitions de 45 secondes = ~4min30 d'activité par réveil Railway
-    for i in range(6):
+    last_msg_id = None
+    for i in range(5):
         now = datetime.now().strftime("%H:%M:%S")
-        update_status(f"🛰️ *Sniper Butterfly en ligne*\n🔄 Scan cycle : `{i+1}/6`\n🕒 Dernier passage : `{now}`\n✅ Statut : Surveillance active")
+        
+        # Supprime l'ancien message de statut et envoie le nouveau
+        delete_message(last_msg_id)
+        last_msg_id = update_status(f"🛰️ *Sniper en cours...*\nCycle : `{i+1}/5` | Heure : `{now}`\nCibles : UV, Freehand, CH")
         
         run_scan()
-        
-        if i < 5:
-            time.sleep(45)
-    print("💤 Fin du cycle, mise en veille jusqu'au prochain Cron.")
+        if i < 4:
+            time.sleep(55)
+    
+    # Nettoyage final pour ne pas laisser de traces
+    delete_message(last_msg_id)
 
 if __name__ == "__main__":
     main()

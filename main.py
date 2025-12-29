@@ -57,7 +57,7 @@ def is_good_deal(item):
 
     if "Butterfly Knife | Freehand" in name:
         wear = item["item"]["float_value"]
-        if wear <= 0.08 and 520 <= price <= 540:
+        if wear <= 0.08 and price <= 1000:
             return True
 
     return False
@@ -85,4 +85,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

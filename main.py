@@ -17,13 +17,14 @@ CSFLOAT_API_KEY = os.getenv("CSFLOAT_API_KEY")
 DMARKET_PUB = os.getenv("DMARKET_PUBLIC_KEY") 
 DMARKET_SEC = os.getenv("DMARKET_SECRET_KEY")
 
-# Recherches spécifiques CSFloat
+# Recherches spécifiques CSFloat (Syntaxe Smart Filter)
 RECHERCHES_CS = [
     "Butterfly Knife Ultraviolet <585€ newest",
     "Butterfly Knife Stained <550€ newest"
 ]
 
 def update_status(text):
+    """Envoie un message de statut silencieux sur Telegram"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID, 
@@ -32,25 +33,32 @@ def update_status(text):
         "disable_notification": True
     }
     try:
-        res = requests.post(url, json=payload).json()
-        return res.get("result", {}).get("message_id")
+        r_tg = requests.post(url, json=payload).json()
+        return r_tg.get("result", {}).get("message_id")
     except:
         return None
 
 def delete_message(msg_id):
+    """Supprime le message de statut précédent"""
     if msg_id:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage"
         requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "message_id": msg_id})
 
 def is_good_deal(name, price, wear):
+    """Critères de sélection Ultraviolet et Stained"""
+    # Butterfly Ultraviolet (Field-Tested) - SEUIL 520€
     if "Ultraviolet" in name and "Field-Tested" in name:
         if price <= 520: return True
         if wear <= 0.16 and price <= 580: return True
+    
+    # Butterfly Stained (Field-Tested) - SEUIL 545€ / Float 0.30
     if "Stained" in name and "Field-Tested" in name:
         if price <= 545 and wear <= 0.30: return True
+        
     return False
 
 def scan_csfloat():
+    """Scan des annonces sur CSFloat"""
     headers = {"Authorization": CSFLOAT_API_KEY}
     for query in RECHERCHES_CS:
         params = {"limit": 30, "full_text": query, "sort_by": "most_recent"}
@@ -59,24 +67,26 @@ def scan_csfloat():
             if r.status_code == 200:
                 items = r.json().get("data", [])
                 for item in items:
-                    item_info = item.get("item", {})
-                    name = item_info.get("market_hash_name", "")
+                    item_data = item.get("item", {})
+                    name = item_data.get("market_hash_name", "")
                     price = item.get("price", 0) / 100
-                    wear = item_info.get("float_value", 0.0)
+                    wear = item_data.get("float_value", 0.0)
                     if is_good_deal(name, price, wear):
                         send_alert(name, price, wear, f"https://csfloat.com/item/{item['id']}", "CSFloat")
         except Exception as e:
             print(f"⚠️ Erreur CSFloat : {e}")
 
 def scan_dmarket():
+    """Scan des annonces sur DMarket avec signature PyNaCl"""
     if not DMARKET_PUB or not DMARKET_SEC:
         return
 
     method = "GET"
     path = "/exchange/v1/market/items?side=cash&title=Butterfly%20Knife&orderBy=updatedAt&orderDir=desc&limit=50&currency=EUR"
     timestamp = str(int(time.time()))
-    sig_string = method + path + "" + timestamp
     
+    # Préparation de la signature
+    sig_string = method + path + "" + timestamp
     try:
         seed = bytes.fromhex(DMARKET_SEC[:64])
         signing_key = nacl.signing.SigningKey(seed)
@@ -88,7 +98,7 @@ def scan_dmarket():
             "X-Timestamp": timestamp
         }
         
-        # LA LIGNE 66 EST ICI (Vérifiée)
+        # Ligne corrigée
         r = requests.get(f"https://api.dmarket.com{path}", headers=headers, timeout=10)
         
         if r.status_code == 200:
@@ -102,15 +112,18 @@ def scan_dmarket():
                     if is_good_deal(name, price, wear):
                         url = f"https://dmarket.com/ingame-items/item-list/csgo-skins?title={name}"
                         send_alert(name, price, wear, url, "DMarket")
+        else:
+            print(f"❌ DMarket Erreur API : {r.status_code}")
     except Exception as e:
-        print(f"⚠️ Erreur DMarket : {e}")
+        print(f"⚠️ Erreur DMarket Signature : {e}")
 
 def send_alert(name, price, wear, url, source):
+    """Envoie l'alerte sur Telegram"""
     msg = (f"🎯 *ALERTE {source.upper()} !*\n\n"
            f"🔪 *{name}*\n"
            f"💰 *Prix : {price}€*\n"
            f"📉 *Float :* `{wear:.5f}`\n\n"
-           f"🔗 [LIEN DIRECT]({url})")
+           f"🔗 [LIEN VERS L'OFFRE]({url})")
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
                   json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 

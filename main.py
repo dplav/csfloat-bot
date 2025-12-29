@@ -13,12 +13,13 @@ TELEGRAM_CHAT_ID = "6116293616"
 CSFLOAT_API_KEY = os.getenv("CSFLOAT_API_KEY")
 HEADERS = {"Authorization": CSFLOAT_API_KEY}
 
-# Syntaxe optimisée basée sur tes recherches
+# Syntaxe optimisée incluant le nouveau Butterfly Stained
 RECHERCHES = [
     "Butterfly Knife Ultraviolet <560€ newest",
     "Butterfly Knife Freehand <560€ newest",
     "Butterfly Knife Case Hardened <540€ newest",
-    "Butterfly Knife Case Hardened >25% newest" # Spécial Blue Gem
+    "Butterfly Knife Case Hardened >25% newest",
+    "Butterfly Knife Stained <545€ newest"  # Nouvelle recherche pour le Stained
 ]
 
 def update_status(text):
@@ -33,24 +34,27 @@ def delete_message(msg_id):
         requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "message_id": msg_id})
 
 def is_good_deal(item):
-    """Vérification sécurisée pour éviter l'erreur float_value"""
-    # On récupère les infos de manière sécurisée
+    """Vérification précise des prix et du float (incluant le Stained)"""
     item_data = item.get("item", {})
     name = item_data.get("market_hash_name", "")
     price = item.get("price", 0) / 100
+    wear = item_data.get("float_value", 0.0)
     
-    # Correction de l'erreur : on utilise .get() avec 0.0 par défaut
-    wear = item_data.get("float_value")
-    if wear is None:
-        wear = 0.0  # Valeur par défaut si absent
-    
-    # Filtre spécifique Ultraviolet FT (car le float compte beaucoup ici)
+    # 1. Butterfly Ultraviolet
     if "Ultraviolet" in name and "Field-Tested" in name:
         if price <= 515 or (wear <= 0.16 and price <= 580):
             return True
         return False
+
+    # 2. Butterfly Stained (Tes nouveaux critères)
+    if "Stained" in name:
+        # On vérifie si c'est bien un Field-Tested avec float < 0.30
+        if "Field-Tested" in name:
+            if price <= 545 and wear <= 0.30:
+                return True
+        return False
         
-    # Pour les autres, si l'API l'a trouvé via full_text, c'est que c'est bon
+    # Pour Freehand et Case Hardened, les filtres de la recherche suffisent
     return True
 
 def run_scan():
@@ -64,7 +68,7 @@ def run_scan():
             r = requests.get("https://csfloat.com/api/v1/listings", headers=HEADERS, params=params, timeout=10)
             if r.status_code == 200:
                 items = r.json().get("data", [])
-                print(f"🔎 {query} : {len(items)} items.")
+                print(f"🔎 {query} : {len(items)} items analysés.")
                 for item in items:
                     if is_good_deal(item):
                         send_alert(item)
@@ -80,7 +84,6 @@ def send_alert(item):
     img = item_data.get('screenshot', item_data.get('image'))
     url = f"https://csfloat.com/item/{item['id']}"
     
-    # Ajout du pourcentage de bleu dans l'alerte si disponible
     blue = item_data.get("blue_gem_percentage")
     blue_str = f"💎 *Bleu :* `{blue}%`" if blue else ""
 
@@ -99,7 +102,7 @@ def main():
     for i in range(6):
         now = datetime.now().strftime("%H:%M:%S")
         delete_message(last_msg_id)
-        last_msg_id = update_status(f"🛰️ *Sniper Expert Pro*\nCycle : `{i+1}/6` | `{now}`\nStatut : ✅ Scan intelligent")
+        last_msg_id = update_status(f"🛰️ *Sniper Expert Pro*\nCycle : `{i+1}/6` | `{now}`\nCibles : UV, Freehand, CH, Stained")
         
         run_scan()
         if i < 5:

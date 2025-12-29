@@ -27,19 +27,16 @@ def is_good_deal(name, price_eur, wear):
 def scan_csfloat():
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan CSFloat...")
     headers = {"Authorization": CSFLOAT_API_KEY.strip() if CSFLOAT_API_KEY else ""}
-    
-    # On sépare les termes de recherche pour éviter les erreurs d'URL
     queries = ["Butterfly Knife Ultraviolet", "Butterfly Knife Stained"]
     
     for q in queries:
+        # Correction : limit doit être un entier, pas "30"
         params = {
             "limit": 30,
             "full_text": q,
-            "sort_by": "most_recent",
-            "category": "knife"
+            "sort_by": "most_recent"
         }
         try:
-            # On laisse requests gérer l'encodage des paramètres
             r = requests.get("https://csfloat.com/api/v1/listings", headers=headers, params=params, timeout=15)
             if r.status_code == 200:
                 data = r.json().get("data", [])
@@ -51,7 +48,7 @@ def scan_csfloat():
                     if is_good_deal(name, price, wear):
                         send_alert(name, price, wear, f"https://csfloat.com/item/{item['id']}", "CSFloat")
             else:
-                print(f"❌ Erreur CSFloat API {r.status_code}: {r.text[:50]}")
+                print(f"❌ CSFloat Error {r.status_code}: {r.text[:50]}")
         except Exception as e:
             print(f"⚠️ Erreur CSFloat: {e}")
 
@@ -63,23 +60,12 @@ def scan_dmarket():
     pub_key = DMARKET_PUB.strip()
     sec_key = DMARKET_SEC.strip()
 
-    # DMarket est très strict sur l'ordre alphabétique des paramètres pour la signature
+    # URL simplifiée au maximum pour la signature
     path = "/exchange/v1/market/items"
-    params = {
-        "currency": "USD",
-        "limit": "50",
-        "orderBy": "updatedAt",
-        "orderDir": "desc",
-        "side": "cash",
-        "title": "Butterfly Knife"
-    }
-    
-    # Reconstruction manuelle de la query string triée pour la signature
-    query_string = "&".join([f"{k}={v}".replace(" ", "%20") for k, v in sorted(params.items())])
-    full_path_for_sig = f"{path}?{query_string}"
+    query = "currency=USD&limit=50&orderBy=updatedAt&orderDir=desc&side=cash&title=Butterfly%20Knife"
     
     timestamp = str(int(time.time()))
-    sig_string = "GET" + full_path_for_sig + "" + timestamp
+    sig_string = "GET" + path + "?" + query + "" + timestamp
     
     try:
         seed = bytes.fromhex(sec_key[:64])
@@ -89,16 +75,14 @@ def scan_dmarket():
         headers = {
             "X-Api-Key": pub_key,
             "X-Sign": signature,
-            "X-Timestamp": timestamp,
-            "Accept": "application/json"
+            "X-Timestamp": timestamp
         }
         
-        # On utilise le full_path_for_sig pour être sûr que l'URL appelée = URL signée
-        r = requests.get(f"https://api.dmarket.com{full_path_for_sig}", headers=headers, timeout=15)
+        r = requests.get(f"https://api.dmarket.com{path}?{query}", headers=headers, timeout=15)
         
         if r.status_code == 200:
             items = r.json().get("objects", [])
-            print(f"✅ DMarket : {len(items)} items vérifiés.")
+            print(f"✅ DMarket : {len(items)} items trouvés.")
             for item in items:
                 name = item.get("title", "")
                 if any(x in name for x in ["Ultraviolet", "Stained"]):
@@ -111,12 +95,11 @@ def scan_dmarket():
                             send_alert(name, price_eur, wear, url, "DMarket")
                     except: continue
         else:
-            print(f"❌ DMarket Erreur {r.status_code}: {r.text[:100]}")
+            print(f"❌ DMarket Error {r.status_code}: {r.text[:50]}")
     except Exception as e:
         print(f"⚠️ Erreur DMarket: {e}")
 
 def send_alert(name, price, wear, url, source):
-    print(f"🎯 ALERTE TROUVÉE sur {source} !")
     msg = (f"🎯 *ALERTE {source.upper()} !*\n\n"
            f"🔪 *{name}*\n"
            f"💰 *Prix : {price:.2f}€*\n"
@@ -126,11 +109,11 @@ def send_alert(name, price, wear, url, source):
                   json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 def main():
-    print("🚀 Sniper Expert démarré...")
+    print("🚀 Sniper Redémarré (Fix Types & Signature)...")
     while True:
         scan_csfloat()
         scan_dmarket()
-        time.sleep(60) # Augmentation du délai pour éviter les bans IP
+        time.sleep(60)
 
 if __name__ == "__main__":
     main()

@@ -17,11 +17,13 @@ DMARKET_SEC = os.getenv("DMARKET_SECRET_KEY")
 USD_TO_EUR = 0.95
 
 def is_good_deal(name, price_eur, wear):
+    # On s'assure que c'est bien un Butterfly Knife et qu'il est FT
+    if "Butterfly Knife" not in name or "Field-Tested" not in name:
+        return False
+        
     is_uv = "Ultraviolet" in name
     is_stained = "Stained" in name
-    if not (is_uv or is_stained) or "Field-Tested" not in name:
-        return False
-
+    
     if is_uv:
         if price_eur <= 525: return True
         if wear <= 0.16 and price_eur <= 585: return True
@@ -33,10 +35,10 @@ def scan_csfloat():
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan CSFloat...")
     headers = {"Authorization": CSFLOAT_API_KEY.strip() if CSFLOAT_API_KEY else ""}
     
-    # Paramètres simplifiés pour éviter l'erreur 400
+    # Utilisation de 'full_text' au lieu de 'type' pour éviter l'erreur de schéma
     params = {
         "limit": 50, 
-        "type": "butterfly_knife",
+        "full_text": "Butterfly Knife",
         "sort_by": "most_recent"
     }
     
@@ -56,7 +58,7 @@ def scan_csfloat():
                         send_alert(name, price, wear, f"https://csfloat.com/item/{i['id']}", "CSFloat")
             print(f"   └─ ✅ {len(items)} Butterfly scannés | {count} cibles trouvées | {deals} deal")
         else:
-            print(f"❌ CSFloat Error {r.status_code}: {r.text[:100]}")
+            print(f"❌ CSFloat Error {r.status_code}")
     except Exception as e:
         print(f"⚠️ Erreur CSFloat: {e}")
 
@@ -66,17 +68,23 @@ def scan_dmarket():
     
     pub, sec = DMARKET_PUB.strip(), DMARKET_SEC.strip()
     path = "/exchange/v1/market/items"
-    # On retire "Knife" pour n'avoir aucun espace dans l'URL et la signature
-    query = "currency=USD&limit=50&orderBy=updatedAt&orderDir=desc&side=cash&title=Butterfly"
+    # Query simplifiée à l'extrême
+    query = "currency=USD&limit=50&side=cash&title=Butterfly"
     timestamp = str(int(time.time()))
     
+    # Signature v10 (Strict respect de la concaténation)
     sig_string = f"GET{path}?{query}{timestamp}"
     
     try:
         signing_key = nacl.signing.SigningKey(bytes.fromhex(sec[:64]))
         signature = signing_key.sign(sig_string.encode('utf-8')).signature.hex()
         
-        headers = {"X-Api-Key": pub, "X-Sign": signature, "X-Timestamp": timestamp}
+        headers = {
+            "X-Api-Key": pub,
+            "X-Sign": signature,
+            "X-Timestamp": timestamp
+        }
+        
         r = requests.get(f"https://api.dmarket.com{path}?{query}", headers=headers, timeout=15)
         
         if r.status_code == 200:
@@ -107,7 +115,7 @@ def send_alert(name, price, wear, url, source):
                   json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 def main():
-    print("🚀 Sniper v9.0 (Full Fix 400)")
+    print("🚀 Sniper v10.0 (Mode Recherche Textuelle)")
     while True:
         scan_csfloat()
         scan_dmarket()

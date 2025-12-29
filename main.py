@@ -2,28 +2,27 @@ import os
 import requests
 import time
 import sys
-import nacl.signing
 from datetime import datetime
 
+# Force l'affichage des logs
 sys.stdout.reconfigure(line_buffering=True)
 
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = "6116293616"
 CSFLOAT_API_KEY = os.getenv("CSFLOAT_API_KEY")
-DMARKET_PUB = os.getenv("DMARKET_PUBLIC_KEY")
-DMARKET_SEC = os.getenv("DMARKET_SECRET_KEY")
 
 USD_TO_EUR = 0.95
 
 def is_good_deal(name, price_eur, wear):
-    # On s'assure que c'est bien un Butterfly Knife et qu'il est FT
-    if "Butterfly Knife" not in name or "Field-Tested" not in name:
+    # On vérifie que c'est bien un Butterfly Knife et qu'il est FT
+    if "Field-Tested" not in name:
         return False
         
     is_uv = "Ultraviolet" in name
     is_stained = "Stained" in name
     
+    # Seuils avec tolérance +5€
     if is_uv:
         if price_eur <= 525: return True
         if wear <= 0.16 and price_eur <= 585: return True
@@ -32,12 +31,12 @@ def is_good_deal(name, price_eur, wear):
     return False
 
 def scan_csfloat():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan CSFloat...")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan CSFloat (Turbo 100 items)...")
     headers = {"Authorization": CSFLOAT_API_KEY.strip() if CSFLOAT_API_KEY else ""}
     
-    # Utilisation de 'full_text' au lieu de 'type' pour éviter l'erreur de schéma
+    # On augmente la limite à 100 pour balayer plus large
     params = {
-        "limit": 50, 
+        "limit": 100, 
         "full_text": "Butterfly Knife",
         "sort_by": "most_recent"
     }
@@ -47,65 +46,34 @@ def scan_csfloat():
         if r.status_code == 200:
             items = r.json().get("data", [])
             count, deals = 0, 0
+            found_names = []
+            
             for i in items:
                 name = i['item']['market_hash_name']
                 if "Ultraviolet" in name or "Stained" in name:
                     count += 1
                     price = i['price'] / 100
                     wear = i['item'].get('float_value', 0.0)
+                    
+                    # On garde trace de ce qu'on a vu pour les logs
+                    found_names.append(f"{name.replace('Butterfly Knife | ', '')} ({price:.0f}€)")
+                    
                     if is_good_deal(name, price, wear):
                         deals += 1
                         send_alert(name, price, wear, f"https://csfloat.com/item/{i['id']}", "CSFloat")
+            
+            # Affichage des skins cibles trouvés dans le scan actuel
+            if found_names:
+                print(f"   └─ 👀 Vus : {', '.join(list(set(found_names)))}")
+            
             print(f"   └─ ✅ {len(items)} Butterfly scannés | {count} cibles trouvées | {deals} deal")
         else:
             print(f"❌ CSFloat Error {r.status_code}")
     except Exception as e:
         print(f"⚠️ Erreur CSFloat: {e}")
 
-def scan_dmarket():
-    if not DMARKET_PUB or not DMARKET_SEC: return
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan DMarket...")
-    
-    pub, sec = DMARKET_PUB.strip(), DMARKET_SEC.strip()
-    path = "/exchange/v1/market/items"
-    # Query simplifiée à l'extrême
-    query = "currency=USD&limit=50&side=cash&title=Butterfly"
-    timestamp = str(int(time.time()))
-    
-    # Signature v10 (Strict respect de la concaténation)
-    sig_string = f"GET{path}?{query}{timestamp}"
-    
-    try:
-        signing_key = nacl.signing.SigningKey(bytes.fromhex(sec[:64]))
-        signature = signing_key.sign(sig_string.encode('utf-8')).signature.hex()
-        
-        headers = {
-            "X-Api-Key": pub,
-            "X-Sign": signature,
-            "X-Timestamp": timestamp
-        }
-        
-        r = requests.get(f"https://api.dmarket.com{path}?{query}", headers=headers, timeout=15)
-        
-        if r.status_code == 200:
-            items = r.json().get("objects", [])
-            count, deals = 0, 0
-            for it in items:
-                name = it.get("title", "")
-                if "Butterfly Knife" in name and any(x in name for x in ["Ultraviolet", "Stained"]):
-                    count += 1
-                    p_eur = (int(it['price']['USD']) / 100) * USD_TO_EUR
-                    wear = it.get("extra", {}).get("floatValue", 0.0)
-                    if is_good_deal(name, p_eur, wear):
-                        deals += 1
-                        send_alert(name, p_eur, wear, "https://dmarket.com", "DMarket")
-            print(f"   └─ ✅ {count} Butterfly cibles sur DMarket | {deals} deal")
-        else:
-            print(f"❌ DMarket Error {r.status_code}")
-    except Exception as e:
-        print(f"⚠️ Erreur DMarket: {e}")
-
 def send_alert(name, price, wear, url, source):
+    print(f"🎯 ALERTE ENVOYÉE : {name} à {price}€")
     msg = (f"🎯 *ALERTE {source.upper()} !*\n\n"
            f"🔪 *{name}*\n"
            f"💰 *Prix : {price:.2f}€*\n"
@@ -115,11 +83,12 @@ def send_alert(name, price, wear, url, source):
                   json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 def main():
-    print("🚀 Sniper v10.0 (Mode Recherche Textuelle)")
+    print("🚀 Sniper v11.0 (CSFloat Turbo Mode)")
+    print("Cibles : UV FT (<=525€ ou <=585€ si float <0.16) | Stained FT (<=550€)")
     while True:
         scan_csfloat()
-        scan_dmarket()
-        time.sleep(60)
+        # On réduit l'attente à 30 secondes pour être plus réactif
+        time.sleep(30)
 
 if __name__ == "__main__":
     main()

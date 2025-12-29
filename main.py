@@ -5,7 +5,6 @@ import sys
 import nacl.signing
 from datetime import datetime
 
-# Force l'affichage des logs sur Railway
 sys.stdout.reconfigure(line_buffering=True)
 
 # --- CONFIGURATION ---
@@ -18,7 +17,6 @@ DMARKET_SEC = os.getenv("DMARKET_SECRET_KEY")
 USD_TO_EUR = 0.95
 
 def is_good_deal(name, price_eur, wear):
-    """Vérifie si l'item correspond à tes prix cibles"""
     if "Ultraviolet" in name and "Field-Tested" in name:
         if price_eur <= 520: return True
         if wear <= 0.16 and price_eur <= 580: return True
@@ -27,15 +25,22 @@ def is_good_deal(name, price_eur, wear):
     return False
 
 def scan_csfloat():
-    """Scan CSFloat avec logs de présence"""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan CSFloat...")
-    headers = {"Authorization": CSFLOAT_API_KEY}
+    headers = {"Authorization": CSFLOAT_API_KEY.strip() if CSFLOAT_API_KEY else ""}
+    
+    # On sépare les termes de recherche pour éviter les erreurs d'URL
     queries = ["Butterfly Knife Ultraviolet", "Butterfly Knife Stained"]
     
-    for query in queries:
-        params = {"limit": 30, "full_text": query, "sort_by": "most_recent", "category": "knife"}
+    for q in queries:
+        params = {
+            "limit": 30,
+            "full_text": q,
+            "sort_by": "most_recent",
+            "category": "knife"
+        }
         try:
-            r = requests.get("https://csfloat.com/api/v1/listings", headers=headers, params=params, timeout=10)
+            # On laisse requests gérer l'encodage des paramètres
+            r = requests.get("https://csfloat.com/api/v1/listings", headers=headers, params=params, timeout=15)
             if r.status_code == 200:
                 data = r.json().get("data", [])
                 for item in data:
@@ -46,28 +51,35 @@ def scan_csfloat():
                     if is_good_deal(name, price, wear):
                         send_alert(name, price, wear, f"https://csfloat.com/item/{item['id']}", "CSFloat")
             else:
-                print(f"❌ Erreur CSFloat API: {r.status_code}")
+                print(f"❌ Erreur CSFloat API {r.status_code}: {r.text[:50]}")
         except Exception as e:
             print(f"⚠️ Erreur CSFloat: {e}")
 
 def scan_dmarket():
-    """Scan DMarket avec signature simplifiée (Ordre alphabétique)"""
     if not DMARKET_PUB or not DMARKET_SEC:
-        print("❌ Clés DMarket manquantes dans Railway")
         return
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan DMarket...")
     pub_key = DMARKET_PUB.strip()
     sec_key = DMARKET_SEC.strip()
 
-    # Paramètres classés par ordre alphabétique (Crucial pour DMarket)
+    # DMarket est très strict sur l'ordre alphabétique des paramètres pour la signature
     path = "/exchange/v1/market/items"
-    query = "currency=USD&limit=50&orderBy=updatedAt&orderDir=desc&side=cash&title=Butterfly%20Knife"
-    full_url = f"{path}?{query}"
+    params = {
+        "currency": "USD",
+        "limit": "50",
+        "orderBy": "updatedAt",
+        "orderDir": "desc",
+        "side": "cash",
+        "title": "Butterfly Knife"
+    }
+    
+    # Reconstruction manuelle de la query string triée pour la signature
+    query_string = "&".join([f"{k}={v}".replace(" ", "%20") for k, v in sorted(params.items())])
+    full_path_for_sig = f"{path}?{query_string}"
     
     timestamp = str(int(time.time()))
-    # Signature: METHOD + PATH + BODY(vide) + TIMESTAMP
-    sig_string = "GET" + full_url + "" + timestamp
+    sig_string = "GET" + full_path_for_sig + "" + timestamp
     
     try:
         seed = bytes.fromhex(sec_key[:64])
@@ -77,17 +89,19 @@ def scan_dmarket():
         headers = {
             "X-Api-Key": pub_key,
             "X-Sign": signature,
-            "X-Timestamp": timestamp
+            "X-Timestamp": timestamp,
+            "Accept": "application/json"
         }
         
-        r = requests.get(f"https://api.dmarket.com{full_url}", headers=headers, timeout=10)
+        # On utilise le full_path_for_sig pour être sûr que l'URL appelée = URL signée
+        r = requests.get(f"https://api.dmarket.com{full_path_for_sig}", headers=headers, timeout=15)
         
         if r.status_code == 200:
             items = r.json().get("objects", [])
-            print(f"✅ DMarket : {len(items)} items scannés.")
+            print(f"✅ DMarket : {len(items)} items vérifiés.")
             for item in items:
                 name = item.get("title", "")
-                if "Ultraviolet" in name or "Stained" in name:
+                if any(x in name for x in ["Ultraviolet", "Stained"]):
                     try:
                         price_usd = int(item['price']['USD']) / 100
                         price_eur = price_usd * USD_TO_EUR
@@ -97,9 +111,9 @@ def scan_dmarket():
                             send_alert(name, price_eur, wear, url, "DMarket")
                     except: continue
         else:
-            print(f"❌ DMarket Erreur {r.status_code} : {r.text}")
+            print(f"❌ DMarket Erreur {r.status_code}: {r.text[:100]}")
     except Exception as e:
-        print(f"⚠️ Erreur DMarket Signature: {e}")
+        print(f"⚠️ Erreur DMarket: {e}")
 
 def send_alert(name, price, wear, url, source):
     print(f"🎯 ALERTE TROUVÉE sur {source} !")
@@ -112,11 +126,11 @@ def send_alert(name, price, wear, url, source):
                   json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 def main():
-    print("🚀 Sniper démarré...")
+    print("🚀 Sniper Expert démarré...")
     while True:
         scan_csfloat()
         scan_dmarket()
-        time.sleep(45)
+        time.sleep(60) # Augmentation du délai pour éviter les bans IP
 
 if __name__ == "__main__":
     main()

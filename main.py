@@ -11,10 +11,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = "6116293616"
 CSFLOAT_API_KEY = os.getenv("CSFLOAT_API_KEY").strip() if os.getenv("CSFLOAT_API_KEY") else ""
 
-# Mémoire
 seen_items = set()
 current_deals_inventory = {}
-dashboard_message_id = None # Stocke l'ID du message à modifier
+dashboard_message_id = None
 
 def is_good_deal(name, price_eur, wear):
     if "Field-Tested" not in name: return False
@@ -29,9 +28,12 @@ def is_good_deal(name, price_eur, wear):
 
 def scan_target(skin_name):
     headers = {"Authorization": CSFLOAT_API_KEY, "User-Agent": "Mozilla/5.0"}
-    url = f"https://csfloat.com/api/v1/listings?limit=50&sort_by=lowest_price&full_text=Butterfly Knife {skin_name}"
+    # On cherche spécifiquement le modèle Field-Tested pour le comptage
+    url = f"https://csfloat.com/api/v1/listings?limit=50&sort_by=lowest_price&full_text=Butterfly Knife {skin_name} Field-Tested"
     
-    found_this_turn = {}
+    deals_found = {}
+    total_on_market = 0
+    
     try:
         r = requests.get(url, headers=headers, timeout=15)
         if r.status_code == 200:
@@ -40,18 +42,21 @@ def scan_target(skin_name):
                 item_id = i['id']
                 item_data = i.get('item', {})
                 name = item_data.get('market_hash_name', '')
-                if skin_name in name:
+                
+                # On compte uniquement si c'est exactement le bon skin en FT
+                if skin_name in name and "Field-Tested" in name:
+                    total_on_market += 1
                     price = i['price'] / 100
                     wear = item_data.get('float_value', 0.0)
+                    
                     if is_good_deal(name, price, wear):
-                        found_this_turn[item_id] = f"{name} ({price}€)"
+                        deals_found[item_id] = f"{name} ({price}€)"
                         if item_id not in seen_items:
-                            # Alerte critique : on envoie un NOUVEAU message pour faire sonner le tel
                             send_telegram(f"🎯 *NOUVELLE OFFRE !*\n\n🔪 *{name}*\n💰 *{price:.2f}€*\n📉 *Float:* `{wear:.5f}`\n\n🔗 [VOIR](https://csfloat.com/item/{item_id})")
                             seen_items.add(item_id)
-            return found_this_turn
-        return {}
-    except: return {}
+            return deals_found, total_on_market
+        return {}, 0
+    except: return {}, 0
 
 def send_telegram(text):
     r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
@@ -64,38 +69,36 @@ def update_dashboard(text, message_id):
 
 def main():
     global current_deals_inventory, dashboard_message_id
-    print("🚀 Sniper v20.0 (Dashboard Dynamique)")
-    
-    # Création du message de base
-    dashboard_message_id = send_telegram("⏳ Initialisation du Dashboard...")
+    print("🚀 Sniper v22.0 (Inventaire complet)")
+    dashboard_message_id = send_telegram("⏳ Analyse du marché en cours...")
     
     while True:
         now_str = datetime.now().strftime('%H:%M:%S')
         
         # Scans
-        uv_found = scan_target("Ultraviolet")
-        st_found = scan_target("Stained")
-        all_found_now = {**uv_found, **st_found}
+        uv_deals, uv_total = scan_target("Ultraviolet")
+        st_deals, st_total = scan_target("Stained")
+        all_deals_now = {**uv_deals, **st_deals}
         
-        # Détection des ventes (Alerte message séparé)
+        # Détection des ventes
         for old_id, old_name in current_deals_inventory.items():
-            if old_id not in all_found_now:
+            if old_id not in all_deals_now:
                 send_telegram(f"💸 *VENDU !*\n🔪 *{old_name}*")
         
-        # Mise à jour du Dashboard
-        status_icon = "🟢" if (len(all_found_now) > 0) else "⚪"
+        # Construction du Dashboard
         report = (f"🖥️ *DASHBOARD SNIPER BFK*\n"
                   f"🕒 Dernier scan : `{now_str}`\n"
                   f"--- \n"
-                  f"{status_icon} *Deals en ligne :* `{len(all_found_now)}` \n"
-                  f"   └ 🟣 Ultraviolet : `{len(uv_found)}` \n"
-                  f"   └ 🔵 Stained : `{len(st_found)}` \n\n"
-                  f"✅ Surveillance active sur 100 annonces.")
+                  f"🟣 *Ultraviolet Field-Tested*\n"
+                  f"   └ En ligne : `{uv_total}`\n"
+                  f"   └ (`{len(uv_deals)}` bonne affaire)\n\n"
+                  f"🔵 *Stained Field-Tested*\n"
+                  f"   └ En ligne : `{st_total}`\n"
+                  f"   └ (`{len(st_deals)}` bonne affaire)\n\n"
+                  f"⚙️ Status : `Recherche active...`")
         
         update_dashboard(report, dashboard_message_id)
-        
-        current_deals_inventory = all_found_now
-        print(f"[{now_str}] Dashboard mis à jour.")
+        current_deals_inventory = all_deals_now
         time.sleep(45)
 
 if __name__ == "__main__":

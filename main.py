@@ -5,6 +5,7 @@ import sys
 import nacl.signing
 from datetime import datetime
 
+# Force l'affichage des logs sur Railway
 sys.stdout.reconfigure(line_buffering=True)
 
 # --- CONFIGURATION ---
@@ -17,25 +18,26 @@ DMARKET_SEC = os.getenv("DMARKET_SECRET_KEY")
 USD_TO_EUR = 0.95
 
 def is_good_deal(name, price_eur, wear):
+    """Paramètres inchangés : tes seuils de prix et de float"""
+    # Butterfly Ultraviolet (Field-Tested)
     if "Ultraviolet" in name and "Field-Tested" in name:
         if price_eur <= 520: return True
         if wear <= 0.16 and price_eur <= 580: return True
+    
+    # Butterfly Stained (Field-Tested)
     if "Stained" in name and "Field-Tested" in name:
         if price_eur <= 545 and wear <= 0.30: return True
+        
     return False
 
 def scan_csfloat():
+    """Scan CSFloat (Paramètres inchangés)"""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan CSFloat...")
     headers = {"Authorization": CSFLOAT_API_KEY.strip() if CSFLOAT_API_KEY else ""}
     queries = ["Butterfly Knife Ultraviolet", "Butterfly Knife Stained"]
     
     for q in queries:
-        # Correction : limit doit être un entier, pas "30"
-        params = {
-            "limit": 30,
-            "full_text": q,
-            "sort_by": "most_recent"
-        }
+        params = {"limit": 30, "full_text": q, "sort_by": "most_recent"}
         try:
             r = requests.get("https://csfloat.com/api/v1/listings", headers=headers, params=params, timeout=15)
             if r.status_code == 200:
@@ -47,12 +49,11 @@ def scan_csfloat():
                     wear = item_info.get("float_value", 0.0)
                     if is_good_deal(name, price, wear):
                         send_alert(name, price, wear, f"https://csfloat.com/item/{item['id']}", "CSFloat")
-            else:
-                print(f"❌ CSFloat Error {r.status_code}: {r.text[:50]}")
         except Exception as e:
             print(f"⚠️ Erreur CSFloat: {e}")
 
 def scan_dmarket():
+    """Scan DMarket simplifié (title=Butterfly) pour éviter l'erreur 400"""
     if not DMARKET_PUB or not DMARKET_SEC:
         return
 
@@ -60,9 +61,9 @@ def scan_dmarket():
     pub_key = DMARKET_PUB.strip()
     sec_key = DMARKET_SEC.strip()
 
-    # URL simplifiée au maximum pour la signature
+    # Simplification : Butterfly sans espace + ordre alphabétique strict
     path = "/exchange/v1/market/items"
-    query = "currency=USD&limit=50&orderBy=updatedAt&orderDir=desc&side=cash&title=Butterfly%20Knife"
+    query = "currency=USD&limit=50&side=cash&title=Butterfly"
     
     timestamp = str(int(time.time()))
     sig_string = "GET" + path + "?" + query + "" + timestamp
@@ -82,10 +83,11 @@ def scan_dmarket():
         
         if r.status_code == 200:
             items = r.json().get("objects", [])
-            print(f"✅ DMarket : {len(items)} items trouvés.")
+            print(f"✅ DMarket : {len(items)} items analysés.")
             for item in items:
                 name = item.get("title", "")
-                if any(x in name for x in ["Ultraviolet", "Stained"]):
+                # On filtre ici pour retrouver Ultraviolet ou Stained
+                if "Butterfly Knife" in name and any(x in name for x in ["Ultraviolet", "Stained"]):
                     try:
                         price_usd = int(item['price']['USD']) / 100
                         price_eur = price_usd * USD_TO_EUR
@@ -95,7 +97,7 @@ def scan_dmarket():
                             send_alert(name, price_eur, wear, url, "DMarket")
                     except: continue
         else:
-            print(f"❌ DMarket Error {r.status_code}: {r.text[:50]}")
+            print(f"❌ DMarket Error {r.status_code}: {r.text[:100]}")
     except Exception as e:
         print(f"⚠️ Erreur DMarket: {e}")
 
@@ -109,7 +111,7 @@ def send_alert(name, price, wear, url, source):
                   json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 def main():
-    print("🚀 Sniper Redémarré (Fix Types & Signature)...")
+    print("🚀 Sniper relancé avec paramètres de flotte conservés...")
     while True:
         scan_csfloat()
         scan_dmarket()

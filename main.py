@@ -4,24 +4,14 @@ import smtplib
 import time
 from email.mime.text import MIMEText
 
-# Configuration (Assure-toi que ces variables d'environnement sont bien définies)
+# --- CONFIGURATION ---
 CSFLOAT_API_KEY = os.getenv("CSFLOAT_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 EMAIL_TO = os.getenv("EMAIL_TO")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD") # Utilise un "Mot de passe d'application" Gmail
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 
 SEEN_FILE = "seen.txt"
-HEADERS = {"Authorization": CSFLOAT_API_KEY} # CSFloat utilise souvent la clé brute ou Bearer
-
-def load_seen():
-    if not os.path.exists(SEEN_FILE):
-        return set()
-    with open(SEEN_FILE, "r") as f:
-        return set(f.read().splitlines())
-
-def save_seen(seen):
-    with open(SEEN_FILE, "w") as f:
-        f.write("\n".join(list(seen)[-1000:])) # Garde les 1000 derniers pour éviter un fichier trop gros
+HEADERS = {"Authorization": CSFLOAT_API_KEY}
 
 def send_email(subject, body):
     msg = MIMEText(body)
@@ -30,86 +20,78 @@ def send_email(subject, body):
     msg["To"] = EMAIL_TO
 
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.starttls()
+        # On essaie le port 465 (SSL) si le 587 ne marche pas
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
             server.login(EMAIL_FROM, EMAIL_PASSWORD)
             server.send_message(msg)
-            print("✅ E-mail de notification envoyé !")
+            print("✅ E-mail envoyé avec succès !")
     except Exception as e:
-        print(f"❌ Erreur lors de l'envoi de l'e-mail : {e}")
-
-def fetch_listings(query):
-    url = "https://csfloat.com/api/v1/listings"
-    params = {
-        "limit": 10,
-        "sort_by": "most_recent",
-        "market_hash_name": query
-    }
-    try:
-        r = requests.get(url, headers=HEADERS, params=params, timeout=15)
-        r.raise_for_status()
-        return r.json() # CSFloat renvoie directement une liste ou un objet selon l'endpoint
-    except Exception as e:
-        print(f"❌ Erreur API ({query}) : {e}")
-        return []
+        print(f"❌ Erreur critique Email : {e}")
+        print("💡 Conseil : Si tu es sur un hébergeur gratuit, ils bloquent souvent les mails.")
 
 def is_good_deal(item):
     item_info = item.get("item", {})
     name = item_info.get("market_hash_name", "")
     price = item.get("price", 0) / 100
     
-    # Cas 1 : Butterfly Ultraviolet FT avec réduction
+    # Vérification StatTrak (Optionnel selon tes goûts)
+    is_stattrak = "StatTrak™" in name
+
+    # Critère 1 : Butterfly Ultraviolet FT
     if "Butterfly Knife | Ultraviolet" in name and item_info.get("wear_name") == "Field-Tested":
-        market_ref = item.get("reference", {}).get("base_price", 0) / 100
-        if market_ref > 0:
-            discount = ((market_ref - price) / market_ref) * 100
-            if 1.0 <= discount <= 5.0: # J'ai élargi à 5% pour tes tests
+        ref_price = item.get("reference", {}).get("base_price", 0) / 100
+        if ref_price > 0:
+            discount = ((ref_price - price) / ref_price) * 100
+            # On accepte StatTrak ou non, tant que le prix est bon
+            if 1.0 <= discount <= 10.0: 
                 return True
 
-    # Cas 2 : Butterfly Freehand avec Float bas
+    # Critère 2 : Butterfly Freehand (FN ou MW)
     if "Butterfly Knife | Freehand" in name:
         float_val = item_info.get("float_value", 1.0)
-        if float_val <= 0.08 and price <= 1000:
+        # On accepte les bonnes affaires même en StatTrak ici
+        if float_val <= 0.08 and price <= 1100:
             return True
 
     return False
 
+def fetch_listings(query):
+    url = "https://csfloat.com/api/v1/listings"
+    params = {"limit": 5, "sort_by": "most_recent", "market_hash_name": query}
+    try:
+        r = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        return r.json() if isinstance(r.json(), list) else r.json().get("data", [])
+    except:
+        return []
+
 def main():
-    print("🚀 Bot démarré... Surveillance en cours.")
-    seen = load_seen()
+    print("🕵️ Surveillance active (Incluant StatTrak)...")
+    if not all([EMAIL_FROM, EMAIL_PASSWORD, CSFLOAT_API_KEY]):
+        print("⚠️ Attention : Variables d'environnement manquantes !")
     
-    # Liste des skins à surveiller spécifiquement
+    seen = set() # On peut charger le fichier ici si besoin
+
     targets = [
         "★ Butterfly Knife | Ultraviolet (Field-Tested)",
+        "★ StatTrak™ Butterfly Knife | Ultraviolet (Field-Tested)",
         "★ Butterfly Knife | Freehand (Factory New)",
-        "★ Butterfly Knife | Freehand (Minimal Wear)"
+        "★ Butterfly Knife | Freehand (Minimal Wear)",
+        "★ StatTrak™ Butterfly Knife | Freehand (Factory New)"
     ]
 
     while True:
         for target in targets:
-            listings = fetch_listings(target)
-            
-            # Note: selon l'API, c'est soit une liste directe, soit dans .get("data")
-            items = listings if isinstance(listings, list) else listings.get("data", [])
-
+            items = fetch_listings(target)
             for item in items:
                 listing_id = str(item["id"])
-                if listing_id in seen:
-                    continue
-
-                if is_good_deal(item):
+                if listing_id not in seen and is_good_deal(item):
                     name = item["item"]["market_hash_name"]
                     price = item["price"] / 100
-                    url = f"https://csfloat.com/item/{listing_id}"
-                    
-                    print(f"🎯 Affaire trouvée : {name} à {price}€")
-                    body = f"Nouvelle offre détectée !\n\nNom: {name}\nPrix: {price}€\nLien: {url}"
-                    send_email(f"🔥 PROMO CSFLOAT: {name}", body)
-
-                seen.add(listing_id)
+                    print(f"🎯 Trouvé : {name} à {price}€")
+                    send_email(f"🔥 DEAL: {name}", f"Prix: {price}€\nLien: https://csfloat.com/item/{listing_id}")
+                    seen.add(listing_id)
         
-        save_seen(seen)
-        time.sleep(60) # Attend 1 minute avant de recommencer
+        time.sleep(60)
 
 if __name__ == "__main__":
     main()

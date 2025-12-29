@@ -79,26 +79,33 @@ def scan_csfloat():
 def scan_dmarket():
     """Scan des annonces sur DMarket avec signature PyNaCl"""
     if not DMARKET_PUB or not DMARKET_SEC:
+        print("❌ DMarket sauté : Variables manquantes sur Railway")
         return
 
+    # Nettoyage des clés pour éviter les erreurs 400
+    pub_key = DMARKET_PUB.strip()
+    sec_key = DMARKET_SEC.strip()
+
     method = "GET"
+    # Paramètres d'URL propres
     path = "/exchange/v1/market/items?side=cash&title=Butterfly%20Knife&orderBy=updatedAt&orderDir=desc&limit=50&currency=EUR"
     timestamp = str(int(time.time()))
     
     # Préparation de la signature
     sig_string = method + path + "" + timestamp
     try:
-        seed = bytes.fromhex(DMARKET_SEC[:64])
+        # On utilise les 64 premiers caractères de la clé secrète (Seed hexadécimale)
+        seed = bytes.fromhex(sec_key[:64])
         signing_key = nacl.signing.SigningKey(seed)
         signature = signing_key.sign(sig_string.encode('utf-8')).signature.hex()
         
         headers = {
-            "X-Api-Key": DMARKET_PUB,
+            "X-Api-Key": pub_key,
             "X-Sign": signature,
-            "X-Timestamp": timestamp
+            "X-Timestamp": timestamp,
+            "Content-Type": "application/json"
         }
         
-        # Ligne corrigée
         r = requests.get(f"https://api.dmarket.com{path}", headers=headers, timeout=10)
         
         if r.status_code == 200:
@@ -107,13 +114,19 @@ def scan_dmarket():
             for item in items:
                 name = item.get("title", "")
                 if "Ultraviolet" in name or "Stained" in name:
-                    price = int(item['price']['EUR']) / 100
+                    try:
+                        price = int(item['price']['EUR']) / 100
+                    except:
+                        price = 0
+                    
                     wear = item.get("extra", {}).get("floatValue", 0.0)
                     if is_good_deal(name, price, wear):
                         url = f"https://dmarket.com/ingame-items/item-list/csgo-skins?title={name}"
                         send_alert(name, price, wear, url, "DMarket")
         else:
-            print(f"❌ DMarket Erreur API : {r.status_code}")
+            # Affiche le détail de l'erreur 400 pour comprendre le problème
+            print(f"❌ DMarket Erreur {r.status_code} : {r.text}")
+            
     except Exception as e:
         print(f"⚠️ Erreur DMarket Signature : {e}")
 
@@ -133,10 +146,13 @@ def main():
         now = datetime.now().strftime("%H:%M:%S")
         delete_message(last_msg_id)
         last_msg_id = update_status(f"🛰️ *Sniper Dual-Site Actif*\nCycle : `{i+1}/6` | `{now}`\nCibles : UV & Stained")
+        
         scan_csfloat()
         scan_dmarket()
+        
         if i < 5:
             time.sleep(40)
+    
     delete_message(last_msg_id)
 
 if __name__ == "__main__":

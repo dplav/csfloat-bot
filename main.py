@@ -15,7 +15,6 @@ def is_good_deal(name, price_eur, wear):
     if "Field-Tested" not in name:
         return False
     
-    # On cible uniquement tes deux skins
     is_uv = "Ultraviolet" in name
     is_stained = "Stained" in name
     
@@ -32,23 +31,22 @@ def is_good_deal(name, price_eur, wear):
     return False
 
 def scan_csfloat():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan CSFloat (Correction Schema)...")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan CSFloat (Recherche Large)...")
     
     headers = {
         "Authorization": CSFLOAT_API_KEY,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0"
     }
     
-    # Nouvelle URL : on utilise market_hash_name pour éviter l'erreur de type
-    # Cela cible tous les Butterfly Knife
-    url = "https://csfloat.com/api/v1/listings?limit=50&sort_by=most_recent&market_hash_name=★ Butterfly Knife *"
+    # On utilise full_text=Butterfly pour attraper tous les modèles
+    # On trie par most_recent pour avoir les 50 dernières annonces du site
+    url = "https://csfloat.com/api/v1/listings?limit=50&sort_by=most_recent&full_text=Butterfly"
     
     try:
         r = requests.get(url, headers=headers, timeout=15)
         
         if r.status_code == 200:
-            data = r.json()
-            items = data.get("data", [])
+            items = r.json().get("data", [])
             
             count, deals = 0, 0
             for i in items:
@@ -56,7 +54,8 @@ def scan_csfloat():
                     item_data = i.get('item', {})
                     name = item_data.get('market_hash_name', '')
                     
-                    if "Ultraviolet" in name or "Stained" in name:
+                    # Filtrage manuel dans le code pour la sécurité
+                    if "Butterfly Knife" in name and ("Ultraviolet" in name or "Stained" in name):
                         count += 1
                         price = i['price'] / 100
                         wear = item_data.get('float_value', 0.0)
@@ -64,29 +63,17 @@ def scan_csfloat():
                         if is_good_deal(name, price, wear):
                             deals += 1
                             send_alert(name, price, wear, f"https://csfloat.com/item/{i['id']}", "CSFloat")
-                except Exception:
+                except:
                     continue
                     
-            print(f"   └─ ✅ {len(items)} items reçus | {count} cibles détectées | {deals} deal trouvé")
-        
-        elif r.status_code == 400:
-            # Si l'ID numérique est obligatoire, on tente la recherche textuelle pure
-            print("⚠️ Erreur 400 persistante, tentative repli sur recherche textuelle...")
-            fallback_url = "https://csfloat.com/api/v1/listings?limit=50&sort_by=most_recent&full_text=Butterfly Knife"
-            r_fallback = requests.get(fallback_url, headers=headers, timeout=15)
-            if r_fallback.status_code == 200:
-                 print("✅ Repli réussi.")
-                 # (Le reste du traitement serait identique)
-            else:
-                 print(f"❌ Échec total : {r_fallback.text[:100]}")
+            print(f"   └─ ✅ {len(items)} items analysés | {count} cibles détectées | {deals} deal")
         else:
             print(f"❌ Erreur {r.status_code}: {r.text[:100]}")
             
     except Exception as e:
-        print(f"⚠️ Erreur technique : {e}")
+        print(f"⚠️ Erreur : {e}")
 
 def send_alert(name, price, wear, url, source):
-    print(f"🎯 ALERTE : {name} ({price}€)")
     msg = (f"🎯 *ALERTE {source.upper()} !*\n\n"
            f"🔪 *{name}*\n"
            f"💰 *Prix : {price:.2f}€*\n"
@@ -96,7 +83,11 @@ def send_alert(name, price, wear, url, source):
                   json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 def main():
-    print("🚀 Sniper v13.0 (Fix définitif Schema API)")
+    print("🚀 Sniper v14.0 Lancé...")
+    # Test de démarrage Telegram
+    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
+                  json={"chat_id": TELEGRAM_CHAT_ID, "text": "✅ Sniper Butterfly activé et en ligne !"})
+    
     while True:
         scan_csfloat()
         time.sleep(40)

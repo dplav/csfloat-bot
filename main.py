@@ -2,17 +2,15 @@ import os
 import requests
 import time
 import sys
-import ed25519
+import nacl.signing  # On remplace ed25519 par nacl
 from datetime import datetime
 
 sys.stdout.reconfigure(line_buffering=True)
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION (Inchangée) ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = "6116293616"
 CSFLOAT_API_KEY = os.getenv("CSFLOAT_API_KEY")
-
-# Identifiants DMarket via Railway
 DMARKET_PUB = os.getenv("DMARKET_PUBLIC_KEY") 
 DMARKET_SEC = os.getenv("DMARKET_SECRET_KEY")
 
@@ -33,15 +31,11 @@ def delete_message(msg_id):
         requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "message_id": msg_id})
 
 def is_good_deal(name, price, wear):
-    # Criteres Ultraviolet - MIS À JOUR À 520€
     if "Ultraviolet" in name and "Field-Tested" in name:
         if price <= 520: return True
         if wear <= 0.16 and price <= 580: return True
-    
-    # Criteres Stained
     if "Stained" in name and "Field-Tested" in name:
         if price <= 545 and wear <= 0.30: return True
-        
     return False
 
 def scan_csfloat():
@@ -61,6 +55,7 @@ def scan_csfloat():
         except Exception as e:
             print(f"⚠️ Erreur CSFloat : {e}")
 
+# --- NOUVELLE VERSION DMARKET AVEC PYNACL ---
 def scan_dmarket():
     if not DMARKET_PUB or not DMARKET_SEC:
         return
@@ -68,11 +63,13 @@ def scan_dmarket():
     method = "GET"
     path = "/exchange/v1/market/items?side=cash&title=Butterfly%20Knife&orderBy=updatedAt&orderDir=desc&limit=50&currency=EUR"
     timestamp = str(int(time.time()))
-    
     sig_string = method + path + "" + timestamp
+    
     try:
-        signing_key = ed25519.SigningKey(bytes.fromhex(DMARKET_SEC[:64]))
-        signature = signing_key.sign(sig_string.encode('utf-8')).hex()
+        # Signature avec PyNaCl (plus robuste pour Python 3.13)
+        seed = bytes.fromhex(DMARKET_SEC[:64])
+        signing_key = nacl.signing.SigningKey(seed)
+        signature = signing_key.sign(sig_string.encode('utf-8')).signature.hex()
         
         headers = {
             "X-Api-Key": DMARKET_PUB,
@@ -109,11 +106,9 @@ def main():
     for i in range(6):
         now = datetime.now().strftime("%H:%M:%S")
         delete_message(last_msg_id)
-        last_msg_id = update_status(f"🛰️ *Sniper Ultra-Actif*\nCycle : `{i+1}/6` | `{now}`\nCibles : UV & Stained")
-        
+        last_msg_id = update_status(f"🛰️ *Sniper Expert Multi-Site*\nCycle : `{i+1}/6` | `{now}`\nCibles : UV & Stained")
         scan_csfloat()
         scan_dmarket()
-        
         if i < 5:
             time.sleep(40)
     delete_message(last_msg_id)

@@ -1,3 +1,4 @@
+import os
 send_test = True
 if send_test:
     from email.mime.text import MIMEText
@@ -101,6 +102,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

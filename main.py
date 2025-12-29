@@ -1,95 +1,104 @@
 import os
 import requests
-import smtplib
 import time
-from email.mime.text import MIMEText
 
 # --- CONFIGURATION ---
 CSFLOAT_API_KEY = os.getenv("CSFLOAT_API_KEY")
-EMAIL_FROM = os.getenv("EMAIL_FROM")
-EMAIL_TO = os.getenv("EMAIL_TO")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+TELEGRAM_TOKEN = "TON_TOKEN_TELEGRAM"
+TELEGRAM_CHAT_ID = "TON_CHAT_ID"
 
-SEEN_FILE = "seen.txt"
 HEADERS = {"Authorization": CSFLOAT_API_KEY}
 
-def send_email(subject, body):
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_FROM
-    msg["To"] = EMAIL_TO
-
+def send_telegram_notif(text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
     try:
-        # On essaie le port 465 (SSL) si le 587 ne marche pas
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
-            server.login(EMAIL_FROM, EMAIL_PASSWORD)
-            server.send_message(msg)
-            print("✅ E-mail envoyé avec succès !")
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"❌ Erreur critique Email : {e}")
-        print("💡 Conseil : Si tu es sur un hébergeur gratuit, ils bloquent souvent les mails.")
+        print(f"Erreur Telegram : {e}")
 
-def is_good_deal(item):
+def analyze_item(item):
+    """Analyse pourquoi l'item est une bonne affaire et retourne les arguments."""
+    reasons = []
     item_info = item.get("item", {})
     name = item_info.get("market_hash_name", "")
     price = item.get("price", 0) / 100
+    wear = item_info.get("float_value", 0)
     
-    # Vérification StatTrak (Optionnel selon tes goûts)
-    is_stattrak = "StatTrak™" in name
+    # 1. Analyse du Prix vs Marché (Base Price)
+    ref_price = item.get("reference", {}).get("base_price", 0) / 100
+    if ref_price > 0:
+        diff = ref_price - price
+        discount_pct = (diff / ref_price) * 100
+        if diff > 0:
+            reasons.append(f"📉 *Prix :* -{discount_pct:.1f}% sous le marché ({diff:.2f}€ d'économie)")
+    
+    # 2. Analyse du Float (Usure)
+    if wear > 0:
+        reasons.append(f"🔍 *Float :* `{wear:.5f}`")
+        if wear < 0.01: reasons.append("💎 *Rare :* Float exceptionnel (Top Condition)")
+        elif wear < 0.08: reasons.append("✨ *Look :* Très propre (Proche FN)")
 
-    # Critère 1 : Butterfly Ultraviolet FT
-    if "Butterfly Knife | Ultraviolet" in name and item_info.get("wear_name") == "Field-Tested":
-        ref_price = item.get("reference", {}).get("base_price", 0) / 100
-        if ref_price > 0:
-            discount = ((ref_price - price) / ref_price) * 100
-            # On accepte StatTrak ou non, tant que le prix est bon
-            if 1.0 <= discount <= 10.0: 
-                return True
+    # 3. Spécificités
+    if "StatTrak™" in name:
+        reasons.append("⚡ *StatTrak™ :* Comptabilise tes kills !")
+    
+    return "\n".join(reasons)
 
-    # Critère 2 : Butterfly Freehand (FN ou MW)
-    if "Butterfly Knife | Freehand" in name:
-        float_val = item_info.get("float_value", 1.0)
-        # On accepte les bonnes affaires même en StatTrak ici
-        if float_val <= 0.08 and price <= 1100:
+def is_good_deal(item):
+    name = item["item"]["market_hash_name"]
+    price = item["price"] / 100
+    wear = item["item"].get("float_value", 1.0)
+    ref_price = item.get("reference", {}).get("base_price", 0) / 100
+
+    # Logique de filtrage stricte
+    if "Butterfly Knife | Ultraviolet" in name and "Field-Tested" in name:
+        if ref_price > 0 and (ref_price - price) / ref_price >= 0.02: # 2% de réduc
             return True
 
+    if "Butterfly Knife | Freehand" in name:
+        if wear <= 0.09 and price <= 1080: # Bon float ou prix barré
+            return True
+            
     return False
 
-def fetch_listings(query):
-    url = "https://csfloat.com/api/v1/listings"
-    params = {"limit": 5, "sort_by": "most_recent", "market_hash_name": query}
-    try:
-        r = requests.get(url, headers=HEADERS, params=params, timeout=10)
-        return r.json() if isinstance(r.json(), list) else r.json().get("data", [])
-    except:
-        return []
-
 def main():
-    print("🕵️ Surveillance active (Incluant StatTrak)...")
-    if not all([EMAIL_FROM, EMAIL_PASSWORD, CSFLOAT_API_KEY]):
-        print("⚠️ Attention : Variables d'environnement manquantes !")
-    
-    seen = set() # On peut charger le fichier ici si besoin
+    print("🚀 Bot en ligne. Analyse détaillée activée.")
+    seen_ids = set()
 
     targets = [
         "★ Butterfly Knife | Ultraviolet (Field-Tested)",
         "★ StatTrak™ Butterfly Knife | Ultraviolet (Field-Tested)",
         "★ Butterfly Knife | Freehand (Factory New)",
-        "★ Butterfly Knife | Freehand (Minimal Wear)",
-        "★ StatTrak™ Butterfly Knife | Freehand (Factory New)"
+        "★ Butterfly Knife | Freehand (Minimal Wear)"
     ]
 
     while True:
-        for target in targets:
-            items = fetch_listings(target)
-            for item in items:
-                listing_id = str(item["id"])
-                if listing_id not in seen and is_good_deal(item):
-                    name = item["item"]["market_hash_name"]
-                    price = item["price"] / 100
-                    print(f"🎯 Trouvé : {name} à {price}€")
-                    send_email(f"🔥 DEAL: {name}", f"Prix: {price}€\nLien: https://csfloat.com/item/{listing_id}")
-                    seen.add(listing_id)
+        for query in targets:
+            try:
+                params = {"limit": 5, "market_hash_name": query, "sort_by": "most_recent"}
+                r = requests.get("https://csfloat.com/api/v1/listings", headers=HEADERS, params=params, timeout=10)
+                items = r.json() if isinstance(r.json(), list) else r.json().get("data", [])
+
+                for item in items:
+                    listing_id = item["id"]
+                    if listing_id not in seen_ids and is_good_deal(item):
+                        # On génère l'argumentaire
+                        arguments = analyze_item(item)
+                        name = item['item']['market_hash_name']
+                        price = item['price']/100
+                        link = f"https://csfloat.com/item/{listing_id}"
+                        
+                        msg = (f"🔥 *NOUVELLE AFFAIRE DÉTECTÉE*\n\n"
+                               f"🔪 *{name}*\n"
+                               f"💰 *Prix : {price}€*\n\n"
+                               f"📊 *Pourquoi c'est un bon deal ?*\n{arguments}\n\n"
+                               f"🔗 [VOIR L'OFFRE ICI]({link})")
+                        
+                        send_telegram_notif(msg)
+                        seen_ids.add(listing_id)
+            except Exception as e:
+                print(f"Erreur : {e}")
         
         time.sleep(60)
 

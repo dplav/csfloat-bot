@@ -1,3 +1,19 @@
+send_test = True
+if send_test:
+    from email.mime.text import MIMEText
+    import smtplib
+
+    msg = MIMEText("Test Railway → Gmail OK")
+    msg["Subject"] = "TEST BOT CSFLOAT"
+    msg["From"] = os.getenv("EMAIL_FROM")
+    msg["To"] = os.getenv("EMAIL_TO")
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(os.getenv("EMAIL_FROM"), os.getenv("EMAIL_PASSWORD"))
+        server.send_message(msg)
+
+    print("MAIL TEST ENVOYÉ")
+    exit()
 import os
 import requests
 import smtplib
@@ -85,5 +101,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 

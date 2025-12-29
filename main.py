@@ -5,7 +5,6 @@ import sys
 import nacl.signing
 from datetime import datetime
 
-# Force l'affichage des logs sur Railway
 sys.stdout.reconfigure(line_buffering=True)
 
 # --- CONFIGURATION ---
@@ -18,88 +17,86 @@ DMARKET_SEC = os.getenv("DMARKET_SECRET_KEY")
 USD_TO_EUR = 0.95
 
 def is_good_deal(name, price_eur, wear):
-    """Paramètres inchangés : tes seuils de prix et de float"""
-    # Butterfly Ultraviolet (Field-Tested)
     if "Ultraviolet" in name and "Field-Tested" in name:
         if price_eur <= 520: return True
         if wear <= 0.16 and price_eur <= 580: return True
-    
-    # Butterfly Stained (Field-Tested)
     if "Stained" in name and "Field-Tested" in name:
         if price_eur <= 545 and wear <= 0.30: return True
-        
     return False
 
 def scan_csfloat():
-    """Scan CSFloat (Paramètres inchangés)"""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan CSFloat...")
     headers = {"Authorization": CSFLOAT_API_KEY.strip() if CSFLOAT_API_KEY else ""}
-    queries = ["Butterfly Knife Ultraviolet", "Butterfly Knife Stained"]
-    
-    for q in queries:
-        params = {"limit": 30, "full_text": q, "sort_by": "most_recent"}
+    for q in ["Butterfly Knife Ultraviolet", "Butterfly Knife Stained"]:
         try:
-            r = requests.get("https://csfloat.com/api/v1/listings", headers=headers, params=params, timeout=15)
+            r = requests.get("https://csfloat.com/api/v1/listings", 
+                             headers=headers, 
+                             params={"limit": 30, "full_text": q, "sort_by": "most_recent"}, 
+                             timeout=15)
             if r.status_code == 200:
-                data = r.json().get("data", [])
-                for item in data:
-                    item_info = item.get("item", {})
-                    name = item_info.get("market_hash_name", "")
-                    price = item.get("price", 0) / 100
-                    wear = item_info.get("float_value", 0.0)
+                for item in r.json().get("data", []):
+                    name = item['item']['market_hash_name']
+                    price = item['price'] / 100
+                    wear = item['item'].get('float_value', 0.0)
                     if is_good_deal(name, price, wear):
                         send_alert(name, price, wear, f"https://csfloat.com/item/{item['id']}", "CSFloat")
-        except Exception as e:
-            print(f"⚠️ Erreur CSFloat: {e}")
+        except: pass
 
 def scan_dmarket():
-    """Scan DMarket simplifié (title=Butterfly) pour éviter l'erreur 400"""
-    if not DMARKET_PUB or not DMARKET_SEC:
-        return
+    if not DMARKET_PUB or not DMARKET_SEC: return
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan DMarket...")
-    pub_key = DMARKET_PUB.strip()
-    sec_key = DMARKET_SEC.strip()
+    
+    # Nettoyage strict des clés
+    api_key = DMARKET_PUB.replace(" ", "").strip()
+    secret_key = DMARKET_SEC.replace(" ", "").strip()
 
-    # Simplification : Butterfly sans espace + ordre alphabétique strict
+    method = "GET"
     path = "/exchange/v1/market/items"
     query = "currency=USD&limit=50&side=cash&title=Butterfly"
-    
     timestamp = str(int(time.time()))
-    sig_string = "GET" + path + "?" + query + "" + timestamp
+    
+    # Construction du message à signer
+    sig_string = f"{method}{path}?{query}{timestamp}"
     
     try:
-        seed = bytes.fromhex(sec_key[:64])
-        signing_key = nacl.signing.SigningKey(seed)
-        signature = signing_key.sign(sig_string.encode('utf-8')).signature.hex()
+        # DMarket attend la signature du message : Method + Path + Query + Timestamp
+        # Note: Pas de Body pour un GET
+        signing_key = nacl.signing.SigningKey(bytes.fromhex(secret_key[:64]))
+        signed = signing_key.sign(sig_string.encode('utf-8'))
+        signature = signed.signature.hex()
         
         headers = {
-            "X-Api-Key": pub_key,
+            "X-Api-Key": api_key,
             "X-Sign": signature,
-            "X-Timestamp": timestamp
+            "X-Timestamp": timestamp,
+            "Accept": "application/json"
         }
         
-        r = requests.get(f"https://api.dmarket.com{path}?{query}", headers=headers, timeout=15)
+        url = f"https://api.dmarket.com{path}?{query}"
+        r = requests.get(url, headers=headers, timeout=15)
         
         if r.status_code == 200:
             items = r.json().get("objects", [])
             print(f"✅ DMarket : {len(items)} items analysés.")
             for item in items:
                 name = item.get("title", "")
-                # On filtre ici pour retrouver Ultraviolet ou Stained
                 if "Butterfly Knife" in name and any(x in name for x in ["Ultraviolet", "Stained"]):
                     try:
                         price_usd = int(item['price']['USD']) / 100
                         price_eur = price_usd * USD_TO_EUR
                         wear = item.get("extra", {}).get("floatValue", 0.0)
                         if is_good_deal(name, price_eur, wear):
-                            url = f"https://dmarket.com/ingame-items/item-list/csgo-skins?title={name}"
-                            send_alert(name, price_eur, wear, url, "DMarket")
+                            send_alert(name, price_eur, wear, f"https://dmarket.com/ingame-items/item-list/csgo-skins?title={name}", "DMarket")
                     except: continue
         else:
-            print(f"❌ DMarket Error {r.status_code}: {r.text[:100]}")
+            print(f"❌ DMarket Error {r.status_code}: {r.text}")
+            # Si erreur 400 persiste, on log la string de signature pour débugger
+            if r.status_code == 400:
+                print(f"Debug Sig String: {sig_string}")
+
     except Exception as e:
-        print(f"⚠️ Erreur DMarket: {e}")
+        print(f"⚠️ Erreur DMarket Signature: {e}")
 
 def send_alert(name, price, wear, url, source):
     msg = (f"🎯 *ALERTE {source.upper()} !*\n\n"
@@ -111,7 +108,7 @@ def send_alert(name, price, wear, url, source):
                   json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 def main():
-    print("🚀 Sniper relancé avec paramètres de flotte conservés...")
+    print("🚀 Sniper Relancé - Test Signature v3...")
     while True:
         scan_csfloat()
         scan_dmarket()

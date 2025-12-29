@@ -4,6 +4,7 @@ import time
 import sys
 from datetime import datetime
 
+# Force l'affichage des logs immédiatement sur Railway
 sys.stdout.reconfigure(line_buffering=True)
 
 # --- CONFIGURATION ---
@@ -12,11 +13,12 @@ TELEGRAM_CHAT_ID = "6116293616"
 CSFLOAT_API_KEY = os.getenv("CSFLOAT_API_KEY")
 HEADERS = {"Authorization": CSFLOAT_API_KEY}
 
-# On définit nos recherches en utilisant la syntaxe que tu as trouvée
+# Syntaxe optimisée basée sur tes recherches
 RECHERCHES = [
-    "Butterfly Knife Ultraviolet <560€ newest", # Filtre prix direct
+    "Butterfly Knife Ultraviolet <560€ newest",
     "Butterfly Knife Freehand <560€ newest",
-    "Butterfly Knife Case Hardened <540€ newest"
+    "Butterfly Knife Case Hardened <540€ newest",
+    "Butterfly Knife Case Hardened >25% newest" # Spécial Blue Gem
 ]
 
 def update_status(text):
@@ -30,11 +32,31 @@ def delete_message(msg_id):
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage"
         requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "message_id": msg_id})
 
+def is_good_deal(item):
+    """Vérification sécurisée pour éviter l'erreur float_value"""
+    # On récupère les infos de manière sécurisée
+    item_data = item.get("item", {})
+    name = item_data.get("market_hash_name", "")
+    price = item.get("price", 0) / 100
+    
+    # Correction de l'erreur : on utilise .get() avec 0.0 par défaut
+    wear = item_data.get("float_value")
+    if wear is None:
+        wear = 0.0  # Valeur par défaut si absent
+    
+    # Filtre spécifique Ultraviolet FT (car le float compte beaucoup ici)
+    if "Ultraviolet" in name and "Field-Tested" in name:
+        if price <= 515 or (wear <= 0.16 and price <= 580):
+            return True
+        return False
+        
+    # Pour les autres, si l'API l'a trouvé via full_text, c'est que c'est bon
+    return True
+
 def run_scan():
     for query in RECHERCHES:
-        # On utilise 'full_text' pour envoyer ta syntaxe directement à CSFloat
         params = {
-            "limit": 10,
+            "limit": 15,
             "full_text": query,
             "sort_by": "most_recent"
         }
@@ -42,38 +64,31 @@ def run_scan():
             r = requests.get("https://csfloat.com/api/v1/listings", headers=HEADERS, params=params, timeout=10)
             if r.status_code == 200:
                 items = r.json().get("data", [])
-                print(f"🔎 Recherche : '{query}' -> {len(items)} items trouvés.")
+                print(f"🔎 {query} : {len(items)} items.")
                 for item in items:
-                    # On garde une petite sécurité is_good_deal au cas où
                     if is_good_deal(item):
                         send_alert(item)
             time.sleep(1.5)
         except Exception as e:
             print(f"⚠️ Erreur sur {query} : {e}")
 
-def is_good_deal(item):
-    # Sécurité supplémentaire pour le float de l'Ultraviolet
-    name = item.get("item", {}).get("market_hash_name", "")
-    price = item.get("price", 0) / 100
-    wear = item.get("item", {}).get("float_value", 1.0)
-    
-    # Si c'est un UV Field-Tested, on ne veut que les bons prix ou bons floats
-    if "Ultraviolet" in name and "Field-Tested" in name:
-        if price <= 515 or (wear <= 0.16 and price <= 580):
-            return True
-        return False
-    return True # Pour les autres, le filtre 'full_text' a déjà fait le travail
-
 def send_alert(item):
-    name = item['item']['market_hash_name']
-    price = item['price'] / 100
-    img = item['item'].get('screenshot', item['item'].get('image'))
+    item_data = item.get("item", {})
+    name = item_data.get("market_hash_name", "")
+    price = item.get("price", 0) / 100
+    wear = item_data.get("float_value", 0.0)
+    img = item_data.get('screenshot', item_data.get('image'))
     url = f"https://csfloat.com/item/{item['id']}"
     
-    msg = (f"🎯 *OFFRE FILTRÉE DÉTECTÉE !*\n\n"
+    # Ajout du pourcentage de bleu dans l'alerte si disponible
+    blue = item_data.get("blue_gem_percentage")
+    blue_str = f"💎 *Bleu :* `{blue}%`" if blue else ""
+
+    msg = (f"🎯 *OFFRE DÉTECTÉE !*\n\n"
            f"🔪 *{name}*\n"
            f"💰 *Prix : {price}€*\n"
-           f"📉 *Float :* `{item['item']['float_value']:.5f}`\n\n"
+           f"📉 *Float :* `{wear:.5f}`\n"
+           f"{blue_str}\n\n"
            f"🔗 [VOIR SUR CSFLOAT]({url})")
     
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", 
@@ -84,7 +99,7 @@ def main():
     for i in range(6):
         now = datetime.now().strftime("%H:%M:%S")
         delete_message(last_msg_id)
-        last_msg_id = update_status(f"🛰️ *Sniper Expert ON*\nCycle : `{i+1}/6` | `{now}`\nSyntaxe : *Smart Filters*")
+        last_msg_id = update_status(f"🛰️ *Sniper Expert Pro*\nCycle : `{i+1}/6` | `{now}`\nStatut : ✅ Scan intelligent")
         
         run_scan()
         if i < 5:

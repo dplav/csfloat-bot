@@ -11,70 +11,68 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = "6116293616"
 CSFLOAT_API_KEY = os.getenv("CSFLOAT_API_KEY").strip() if os.getenv("CSFLOAT_API_KEY") else ""
 
+# Mémoire du bot pour ne pas envoyer 100 fois le même couteau
+seen_items = set()
+
 def is_good_deal(name, price_eur, wear):
+    """Vérification stricte de tes critères + tolérance 5€"""
     if "Field-Tested" not in name:
         return False
     
     is_uv = "Ultraviolet" in name
     is_stained = "Stained" in name
     
-    if not (is_uv or is_stained):
-        return False
-
-    # Seuils + 5€ de tolérance
+    # CRITÈRES UV : 525€ (Base) ou 585€ (si float < 0.16)
     if is_uv:
         if price_eur <= 525: return True
         if wear <= 0.16 and price_eur <= 585: return True
+    
+    # CRITÈRES STAINED : 550€
     if is_stained:
         if price_eur <= 550: return True
         
     return False
 
-def scan_csfloat():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Scan CSFloat (Recherche Large)...")
+def scan_target(skin_name):
+    """Scanne 50 annonces et filtre selon tes critères"""
+    headers = {"Authorization": CSFLOAT_API_KEY, "User-Agent": "Mozilla/5.0"}
     
-    headers = {
-        "Authorization": CSFLOAT_API_KEY,
-        "User-Agent": "Mozilla/5.0"
-    }
-    
-    # On utilise full_text=Butterfly pour attraper tous les modèles
-    # On trie par most_recent pour avoir les 50 dernières annonces du site
-    url = "https://csfloat.com/api/v1/listings?limit=50&sort_by=most_recent&full_text=Butterfly"
+    # On prend les 50 moins chers pour être sûr de voir tout ce qui est dans ton budget
+    url = f"https://csfloat.com/api/v1/listings?limit=50&sort_by=lowest_price&full_text=Butterfly Knife {skin_name}"
     
     try:
         r = requests.get(url, headers=headers, timeout=15)
-        
         if r.status_code == 200:
             items = r.json().get("data", [])
+            in_criteria = 0
             
-            count, deals = 0, 0
             for i in items:
-                try:
-                    item_data = i.get('item', {})
-                    name = item_data.get('market_hash_name', '')
+                item_id = i['id']
+                item_data = i.get('item', {})
+                name = item_data.get('market_hash_name', '')
+                
+                # On ne traite que si c'est le bon skin
+                if skin_name in name:
+                    price = i['price'] / 100
+                    wear = item_data.get('float_value', 0.0)
                     
-                    # Filtrage manuel dans le code pour la sécurité
-                    if "Butterfly Knife" in name and ("Ultraviolet" in name or "Stained" in name):
-                        count += 1
-                        price = i['price'] / 100
-                        wear = item_data.get('float_value', 0.0)
-                        
-                        if is_good_deal(name, price, wear):
-                            deals += 1
-                            send_alert(name, price, wear, f"https://csfloat.com/item/{i['id']}", "CSFloat")
-                except:
-                    continue
-                    
-            print(f"   └─ ✅ {len(items)} items analysés | {count} cibles détectées | {deals} deal")
-        else:
-            print(f"❌ Erreur {r.status_code}: {r.text[:100]}")
+                    if is_good_deal(name, price, wear):
+                        in_criteria += 1
+                        # Alerte seulement si on ne l'a pas déjà vu
+                        if item_id not in seen_items:
+                            send_alert(name, price, wear, f"https://csfloat.com/item/{item_id}", "CSFLOAT")
+                            seen_items.add(item_id)
             
+            return len(items), in_criteria
+        else:
+            print(f"❌ Erreur API {skin_name}: {r.status_code}")
+            return 0, 0
     except Exception as e:
-        print(f"⚠️ Erreur : {e}")
+        print(f"⚠️ Erreur technique {skin_name}: {e}")
+        return 0, 0
 
 def send_alert(name, price, wear, url, source):
-    msg = (f"🎯 *ALERTE {source.upper()} !*\n\n"
+    msg = (f"🎯 *NOUVELLE OFFRE {source} !*\n\n"
            f"🔪 *{name}*\n"
            f"💰 *Prix : {price:.2f}€*\n"
            f"📉 *Float :* `{wear:.5f}`\n\n"
@@ -83,14 +81,24 @@ def send_alert(name, price, wear, url, source):
                   json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 def main():
-    print("🚀 Sniper v14.0 Lancé...")
-    # Test de démarrage Telegram
-    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                  json={"chat_id": TELEGRAM_CHAT_ID, "text": "✅ Sniper Butterfly activé et en ligne !"})
+    print("🚀 Sniper v16.0 (Mémoire intelligente + Critères FT)")
     
     while True:
-        scan_csfloat()
-        time.sleep(40)
+        now = datetime.now().strftime('%H:%M:%S')
+        
+        # Scan des deux catégories
+        uv_total, uv_match = scan_target("Ultraviolet")
+        st_total, st_match = scan_target("Stained")
+        
+        print(f"[{now}] Rapport :")
+        print(f"   🔹 UV      : {uv_total} vus | {uv_match} correspondent à tes critères")
+        print(f"   🔹 Stained : {st_total} vus | {st_match} correspondent à tes critères")
+        
+        # Nettoyage de la mémoire si elle devient trop grosse (optionnel)
+        if len(seen_items) > 1000:
+            seen_items.clear()
+            
+        time.sleep(45) # Fréquence de scan
 
 if __name__ == "__main__":
     main()

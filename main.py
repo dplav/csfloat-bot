@@ -2,109 +2,115 @@ import os
 import requests
 import time
 
-# --- CONFIGURATION VIA VARIABLES D'ENVIRONNEMENT ---
-# Le script va chercher ces valeurs dans ton système
+# --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CSFLOAT_API_KEY = os.getenv("CSFLOAT_API_KEY")
 
 HEADERS = {"Authorization": CSFLOAT_API_KEY}
+BUDGET_MAX = 600
 
-def send_telegram_notif(text):
-    """Envoie une notification formatée à ton Telegram"""
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID, 
-        "text": text, 
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": False
-    }
+def send_telegram(text, image_url=None):
+    """Envoie un message avec photo si disponible, sinon texte seul"""
+    base_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+    
     try:
-        r = requests.post(url, json=payload, timeout=10)
-        return r.json()
+        if image_url:
+            url = f"{base_url}/sendPhoto"
+            payload = {"chat_id": TELEGRAM_CHAT_ID, "photo": image_url, "caption": text, "parse_mode": "Markdown"}
+        else:
+            url = f"{base_url}/sendMessage"
+            payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
+        
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"❌ Erreur Telegram : {e}")
 
-def analyze_item(item):
-    """Analyse les détails du skin (float, prix)"""
-    reasons = []
-    item_info = item.get("item", {})
-    price = item.get("price", 0) / 100
-    wear = item_info.get("float_value", 0)
-    
-    # Calcul de la réduction si disponible
-    ref_price = item.get("reference", {}).get("base_price", 0) / 100
-    if ref_price > 0:
-        discount = ((ref_price - price) / ref_price) * 100
-        if discount > 5: # Si plus de 5% de réduction
-            reasons.append(f"📉 *Prix :* -{discount:.1f}% sous le marché")
-    
-    reasons.append(f"🔍 *Float :* `{wear:.5f}`")
-    if wear < 0.21: reasons.append("✨ *Look :* Très propre pour du FT")
-    
-    return "\n".join(reasons)
-
 def is_good_deal(item):
-    """Filtre les couteaux selon tes critères"""
+    """Logique de tri selon tes critères précis"""
     name = item.get("item", {}).get("market_hash_name", "")
+    price = item.get("price", 0) / 100
     wear = item.get("item", {}).get("float_value", 1.0)
     
-    # Critère 1 : Butterfly Ultraviolet FT (Toutes)
-    if "Butterfly Knife | Ultraviolet" in name and "Field-Tested" in name:
-        return True
+    # Filtre de budget global
+    if price > BUDGET_MAX:
+        return False
 
-    # Critère 2 : Butterfly Freehand (Seulement bon float)
-    if "Butterfly Knife | Freehand" in name and wear <= 0.09:
-        return True
-            
+    # 1. Butterfly Ultraviolet (Field-Tested)
+    if "Butterfly Knife | Ultraviolet" in name and "Field-Tested" in name:
+        if price <= 515: return True # Snipe pur
+        if wear <= 0.16 and price <= 585: return True # Top Float
+
+    # 2. Butterfly Freehand
+    if "Butterfly Knife | Freehand" in name:
+        if "(Factory New)" in name and price <= 600: return True
+        if "(Minimal Wear)" in name and price <= 575: return True
+
+    # 3. Butterfly Case Hardened (Recherche de Bleu)
+    if "Case Hardened" in name:
+        # On accepte tout CH sous 540€ (Snipe)
+        if price <= 540: return True
+        # Si CSFloat détecte un pattern rare (Blue Gem / Tier 1-2)
+        if item.get("item", {}).get("is_blue_gem", False): return True
+        # Si le pourcentage de bleu est mentionné dans les tags (si dispo)
+        for tag in item.get("item", {}).get("tags", []):
+            if "Blue" in tag.get("name", "") and "40%" in tag.get("name", ""):
+                return True
+                
     return False
 
 def main():
-    # Vérification des variables
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+    if not TELEGRAM_TOKEN or not CSFLOAT_API_KEY:
         print("❌ Erreur : Variables d'environnement manquantes !")
         return
 
-    print(f"🚀 Bot activé ! Surveillance lancée pour l'ID : {TELEGRAM_CHAT_ID}")
-    send_telegram_notif("✅ *Le bot CSFloat est en ligne !*\nJe surveille les Butterfly Ultraviolet et Freehand pour toi.")
+    print(f"🚀 Sniper Bot en ligne (Budget: {BUDGET_MAX}€)")
+    send_telegram(f"✅ *Sniper Bot Activé*\nSurveillance : UV FT (<515€), Freehand, et Case Hardened Bleu.\nBudget Max : {BUDGET_MAX}€")
 
     seen_ids = set()
-    targets = [
-        "★ Butterfly Knife | Ultraviolet (Field-Tested)",
-        "★ Butterfly Knife | Freehand (Factory New)",
-        "★ Butterfly Knife | Freehand (Minimal Wear)"
+    # On utilise des mots-clés plus larges pour ne rien rater
+    queries = [
+        "Butterfly Knife | Ultraviolet",
+        "Butterfly Knife | Freehand",
+        "Butterfly Knife | Case Hardened"
     ]
 
     while True:
-        for query in targets:
+        for q in queries:
             try:
-                params = {"limit": 10, "market_hash_name": query, "sort_by": "most_recent"}
+                params = {"limit": 15, "market_hash_name": q, "sort_by": "most_recent"}
                 r = requests.get("https://csfloat.com/api/v1/listings", headers=HEADERS, params=params, timeout=10)
                 
-                if r.status_code != 200:
-                    print(f"⚠️ Erreur API CSFloat ({r.status_code})")
-                    continue
-
-                data = r.json()
-                items = data if isinstance(data, list) else data.get("data", [])
+                if r.status_code != 200: continue
+                
+                items = r.json()
+                if not isinstance(items, list): items = items.get("data", [])
 
                 for item in items:
                     listing_id = item["id"]
                     if listing_id not in seen_ids:
                         if is_good_deal(item):
-                            analysis = analyze_item(item)
-                            msg = (f"🔥 *NOUVELLE OFFRE*\n\n"
-                                   f"🔪 *{item['item']['market_hash_name']}*\n"
-                                   f"💰 *Prix : {item['price']/100}€*\n\n"
-                                   f"📊 *Analyse :*\n{analysis}\n\n"
-                                   f"🔗 [VOIR SUR CSFLOAT](https://csfloat.com/item/{listing_id})")
-                            send_telegram_notif(msg)
-                            print(f"🎯 Match envoyé sur Telegram : {item['item']['market_hash_name']}")
+                            # Construction de l'alerte
+                            name = item['item']['market_hash_name']
+                            price = item['price']/100
+                            wear = item['item']['float_value']
+                            img = item['item'].get('screenshot', item['item'].get('image'))
+                            
+                            msg = (f"🔥 *OFFRE DÉTECTÉE*\n\n"
+                                   f"🔪 *{name}*\n"
+                                   f"💰 *Prix : {price}€*\n"
+                                   f"🔍 *Float :* `{wear:.5f}`\n\n"
+                                   f"🔗 [Ouvrir sur CSFloat](https://csfloat.com/item/{listing_id})")
+                            
+                            send_telegram(msg, image_url=img)
+                            print(f"🎯 Alerte envoyée pour : {name}")
+                        
                         seen_ids.add(listing_id)
             except Exception as e:
-                print(f"Erreur pendant le scan : {e}")
+                print(f"Erreur scan : {e}")
         
-        time.sleep(60) # Attente d'une minute entre chaque tour
+        # On attend 45 secondes pour ne pas être banni par l'API
+        time.sleep(45)
 
 if __name__ == "__main__":
     main()

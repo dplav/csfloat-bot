@@ -16,24 +16,23 @@ current_deals_inventory = {}
 dashboard_message_id = None
 
 def is_good_deal(name, price_eur, wear):
-    # 1. ULTRAVIOLET FT (Max 565€ / Float <= 0.24)
+    # CRITÈRE ULTRAVIOLET FT : Max 565€ ET Float < 0.24
     if "Ultraviolet" in name and "Field-Tested" in name:
         return price_eur <= 565 and wear <= 0.24
 
-    # 2. STAINED (Toutes usures pour le scan, mais filtre prix à 550€)
+    # CRITÈRE STAINED : Max 550€ (toutes usures)
     if "Stained" in name:
         return price_eur <= 550
             
     return False
 
-def get_combined_data():
-    """Récupère les 50 Butterfly les moins chers et trie en local"""
+def get_market_data():
     headers = {"Authorization": CSFLOAT_API_KEY, "User-Agent": "Mozilla/5.0"}
-    # On scanne les Butterfly les moins chers globalement pour ne rien rater
-    url = "https://csfloat.com/api/v1/listings?limit=50&sort_by=lowest_price&type=butterfly_knife"
+    # On passe la limite à 100 pour aller chercher les annonces plus chères
+    url = "https://csfloat.com/api/v1/listings?limit=100&sort_by=lowest_price&type=butterfly_knife"
     
     uv_deals, st_deals = {}, {}
-    uv_total, st_total = 0, 0
+    uv_count, st_count = 0, 0
     
     try:
         r = requests.get(url, headers=headers, timeout=15)
@@ -47,36 +46,38 @@ def get_combined_data():
                 item_id = i['id']
                 img = i.get('screenshot_url') or item_data.get('icon_url')
 
-                # Tri Ultraviolet
+                # On vérifie si c'est un Ultraviolet ou un Stained
                 if "Ultraviolet" in name and "Field-Tested" in name:
-                    uv_total += 1
+                    uv_count += 1
                     if is_good_deal(name, price, wear):
                         uv_deals[item_id] = f"{name} ({price}€)"
                         if item_id not in seen_items:
                             send_alert(name, price, wear, item_id, img)
                             seen_items.add(item_id)
                 
-                # Tri Stained
-                if "Stained" in name:
-                    st_total += 1
+                elif "Stained" in name:
+                    st_count += 1
                     if is_good_deal(name, price, wear):
                         st_deals[item_id] = f"{name} ({price}€)"
                         if item_id not in seen_items:
                             send_alert(name, price, wear, item_id, img)
                             seen_items.add(item_id)
                             
-            return uv_deals, uv_total, st_deals, st_total
+            return uv_deals, uv_count, st_deals, st_count
         return {}, 0, {}, 0
-    except: return {}, 0, {}, 0
+    except Exception as e:
+        print(f"Erreur Scan: {e}")
+        return {}, 0, {}, 0
 
 def send_alert(name, price, wear, item_id, img_url):
     url = f"https://csfloat.com/item/{item_id}"
-    text = (f"🎯 *BONNE AFFAIRE DÉTECTÉE !*\n\n"
+    text = (f"🎯 *OFFRE CONFIRMÉE !*\n\n"
             f"🔪 *{name}*\n"
             f"💰 *Prix : {price:.2f}€*\n"
             f"📉 *Float :* `{wear:.5f}`\n\n"
             f"🔗 [VOIR SUR CSFLOAT]({url})")
     
+    # Envoi prioritaire
     try:
         if img_url:
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", 
@@ -90,26 +91,26 @@ def send_alert(name, price, wear, item_id, img_url):
 
 def main():
     global current_deals_inventory, dashboard_message_id
-    print("🚀 Sniper v30.0 (Correction Détection)")
+    print("🚀 Sniper v31.0 (Scan 100 items - Deep Search)")
     
+    # Création du Dashboard
     r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                      json={"chat_id": TELEGRAM_CHAT_ID, "text": "⏳ Initialisation DASHBOARD BFK..."})
+                      json={"chat_id": TELEGRAM_CHAT_ID, "text": "⏳ Initialisation du Dashboard..."})
     dashboard_message_id = r.json().get("result", {}).get("message_id")
     
     while True:
         now_str = datetime.now().strftime('%H:%M:%S')
-        
-        uv_d, uv_t, st_d, st_t = get_combined_data()
+        uv_d, uv_c, st_d, st_c = get_market_data()
         all_deals_now = {**uv_d, **st_d}
         
         report = (f"🖥️ *DASHBOARD SNIPER BFK*\n"
                   f"🕒 *Dernier scan :* `{now_str}`\n"
                   f"--- \n"
                   f"🟣 *UV FT (Max 565€ / Fl < 0.24)*\n"
-                  f"    └ En ligne : `{uv_t}` | Deals : `{len(uv_d)}` \n\n"
+                  f"    └ En ligne (Top 100) : `{uv_c}` | Deals : `{len(uv_d)}` \n\n"
                   f"🔵 *Stained (Max 550€)*\n"
-                  f"    └ En ligne : `{st_t}` | Deals : `{len(st_d)}` \n\n"
-                  f"✅ *Surveillance active.*")
+                  f"    └ En ligne (Top 100) : `{st_c}` | Deals : `{len(st_d)}` \n\n"
+                  f"✅ *Scan profond actif (100 annonces)*")
         
         try:
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText", 

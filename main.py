@@ -104,7 +104,7 @@ def main():
         report = (f"🖥️ *DASHBOARD SNIPER BFK*\n"
                   f"🕒 *Dernier scan :* `{now_str}`\n"
                   f"--- \n"
-                  f"🟣 *UV FT (Max 530€ / Fl < 0.24)*\n"
+                  f"🟣 *UV FT (Max 545€ / Fl < 0.24)*\n"
                   f"   └ En ligne : `{uv_tot}` | Deals : `{len(uv_deals)}` \n\n"
                   f"🔵 *Stained WW (Max 490€)*\n"
                   f"   └ En ligne : `{st_tot}` | Deals : `{len(st_deals)}` \n\n"
@@ -116,4 +116,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

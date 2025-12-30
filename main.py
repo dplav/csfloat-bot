@@ -14,63 +14,59 @@ API_KEY = os.getenv("CSFLOAT_API_KEY", "").replace('"', '').replace("'", "").str
 seen_items = set()
 
 def get_market_data():
-    headers = {"Authorization": API_KEY, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {
+        "Authorization": API_KEY,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     
-    # On retire le filtre (Field-Tested) du nom pour l'API, on filtrera nous-mêmes.
-    # On utilise l'ID de définition pour le Butterfly (def_index=507)
+    # Noms exacts attendus par l'API pour le Field-Tested
     targets = [
-        {"name": "★ Butterfly Knife | Ultraviolet", "search": "★ Butterfly Knife | Ultraviolet", "max_p": 565.99, "max_f": 0.2409, "key": "UV"},
-        {"name": "★ Butterfly Knife | Stained", "search": "★ Butterfly Knife | Stained", "max_p": 550.99, "max_f": 0.45, "key": "ST"}
+        {"name": "★ Butterfly Knife | Ultraviolet (Field-Tested)", "max_p": 565.99, "max_f": 0.2409, "key": "UV"},
+        {"name": "★ Butterfly Knife | Stained (Field-Tested)", "max_p": 550.99, "max_f": 1.0, "key": "ST"}
     ]
     
     results = {}
 
     for t in targets:
-        # On demande 100 items d'un coup pour être sûr de tout ratisser
-        url = f"https://csfloat.com/api/v1/listings?market_hash_name={t['search']}&limit=100&sort_by=lowest_price&type=buy_now"
+        # On demande 30 items, triés par prix croissant
+        url = f"https://csfloat.com/api/v1/listings?market_hash_name={t['name']}&limit=30&sort_by=lowest_price"
         
         try:
             r = requests.get(url, headers=headers, timeout=15)
             if r.status_code == 200:
                 data = r.json().get("data", [])
                 
-                valid_items = []
-                for i in data:
-                    item_data = i.get('item', {})
-                    wear = item_data.get('float_value', 0)
-                    price = i['price'] / 100
-                    
-                    # FILTRE MANUEL DU CODE (On ne garde que le FT : 0.15 < float < 0.38)
-                    if 0.15 <= wear <= 0.38:
-                        valid_items.append(i)
-                        
-                        # ALERTE SI DANS TES PRIX
-                        if price <= t['max_p'] and wear <= t['max_f']:
-                            if i['id'] not in seen_items:
-                                send_triple_alert(t['name'], price, wear, i['id'])
-                                seen_items.add(i['id'])
+                # On récupère le vrai prix minimum affiché par l'API
+                low_p = data[0]['price'] / 100 if data else 0
+                results[t['key']] = {"count": len(data), "lowest": low_p, "target": t['max_p']}
 
-                # Données pour le rapport
-                low_p = valid_items[0]['price'] / 100 if valid_items else (data[0]['price']/100 if data else 0)
-                results[t['key']] = {"count": len(valid_items), "total_api": len(data), "lowest": low_p}
+                for i in data:
+                    item_id = i['id']
+                    if item_id not in seen_items:
+                        price = i['price'] / 100
+                        item_data = i.get('item', {})
+                        wear = item_data.get('float_value', 0)
+                        
+                        # VERIFICATION DES FILTRES
+                        if price <= t['max_p'] and wear <= t['max_f']:
+                            send_triple_alert(t['name'], price, wear, item_id)
+                            seen_items.add(item_id)
             else:
-                results[t['key']] = {"count": 0, "total_api": "ERR", "lowest": 0}
-        except:
-            results[t['key']] = {"count": 0, "total_api": "TIME", "lowest": 0}
+                results[t['key']] = {"count": "ERREUR API", "lowest": r.status_code, "target": t['max_p']}
+        except Exception as e:
+            results[t['key']] = {"count": "TIMEOUT", "lowest": 0, "target": t['max_p']}
 
     send_cycle_report(results)
 
 def send_cycle_report(res):
     now = datetime.now().strftime('%H:%M:%S')
-    report = (f"🔍 *SCAN BRUT CSFLOAT*\n"
+    report = (f"🔍 *STATUT DU SNIPER FT*\n"
               f"🕒 `{now}`\n"
               f"--- \n"
-              f"🟣 *UV* : `{res['UV']['count']}` FT trouvés (sur {res['UV']['total_api']} items)\n"
-              f"   └ Moins cher FT : `{res['UV']['lowest']}€` \n\n"
-              f"🔵 *ST* : `{res['ST']['count']}` FT trouvés (sur {res['ST']['total_api']} items)\n"
-              f"   └ Moins cher FT : `{res['ST']['lowest']}€` \n"
+              f"🟣 *UV FT* : `{res['UV']['count']}` vus | Min : `{res['UV']['lowest']}€` (Cible < {res['UV']['target']}€)\n"
+              f"🔵 *ST FT* : `{res['ST']['count']}` vus | Min : `{res['ST']['lowest']}€` (Cible < {res['ST']['target']}€)\n"
               f"--- \n"
-              f"📡 *Mode* : `Scan 100 + Filtre Manuel FT` ")
+              f"✅ *Statut* : Recherche en cours...")
     
     try:
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
@@ -79,18 +75,19 @@ def send_cycle_report(res):
 
 def send_triple_alert(name, price, wear, item_id):
     url = f"https://csfloat.com/item/{item_id}"
-    msg = (f"🚀 *ALERTE ACHAT IMMÉDIAT* 🚀\n\n🔪 *{name}*\n💰 *{price:.2f}€*\n📉 *Float:* `{wear:.5f}`\n\n🔗 [LIEN CSFLOAT]({url})")
+    msg = (f"🚀 *OBJET TROUVÉ AU PRIX CIBLE !* 🚀\n\n🔪 *{name}*\n💰 *{price:.2f}€*\n📉 *Float:* `{wear:.5f}`\n\n🔗 [CLIQUE ICI POUR ACHETER]({url})")
     try:
+        # 3 messages pour forcer la sonnerie
         for _ in range(3):
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
                           json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
     except: pass
 
 def main():
-    print("🚀 Sniper v53.0 (Scan Brut 100)")
+    print("🚀 Sniper v54.0 - Reset & Precision")
     while True:
         get_market_data()
-        time.sleep(30)
+        time.sleep(35) # Un peu plus de temps pour éviter les blocages
 
 if __name__ == "__main__":
     main()

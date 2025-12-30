@@ -20,19 +20,22 @@ def get_market_data():
         "User-Agent": "Mozilla/5.0"
     }
     
-    # URL simplifiée à l'extrême : Uniquement Butterfly (category=1)
-    # On ne filtre PAS par prix ou par nom ici pour tout recevoir
-    url = "https://csfloat.com/api/v1/listings?category=1&limit=50"
+    # Stratégie v39 : On utilise des filtres de recherche brute
+    # 'category=1' = Butterfly | 'limit=100' pour ratisser large
+    # On enlève tout tri pour ne pas laisser l'API masquer des items
+    url = "https://csfloat.com/api/v1/listings?category=1&limit=100"
     
     uv_deals, st_deals = [], []
     uv_tot, st_tot = 0, 0
     
     try:
         r = requests.get(url, headers=headers, timeout=10)
-        print(f"DEBUG: Status {r.status_code} | Items reçus: {len(r.json().get('data', []))}")
         
         if r.status_code == 200:
             data = r.json().get("data", [])
+            # DEBUG LOG : Pour voir si l'API renvoie ENFIN quelque chose
+            print(f"DEBUG: {len(data)} items butterfly trouvés sur le marché total")
+            
             for i in data:
                 item = i.get('item', {})
                 name = item.get('market_hash_name', '')
@@ -40,11 +43,11 @@ def get_market_data():
                 wear = item.get('float_value', 0.0)
                 item_id = i['id']
 
-                # Analyse Ultraviolet
+                # Analyse Ultraviolet (On cherche juste le mot clé)
                 if "Ultraviolet" in name:
                     uv_tot += 1
-                    # Filtre large pour le test : 566€ / Float 0.25
-                    if price <= 566 and wear <= 0.25:
+                    # Critères de ton image : 561.10€ / Float 0.18
+                    if price <= 568 and wear <= 0.25:
                         if item_id not in seen_items:
                             send_alert(name, price, wear, item_id, i.get('screenshot_url'))
                             seen_items.add(item_id)
@@ -53,7 +56,7 @@ def get_market_data():
                 # Analyse Stained
                 elif "Stained" in name:
                     st_tot += 1
-                    if price <= 551:
+                    if price <= 555:
                         if item_id not in seen_items:
                             send_alert(name, price, wear, item_id, i.get('screenshot_url'))
                             seen_items.add(item_id)
@@ -61,12 +64,12 @@ def get_market_data():
 
         return uv_deals, uv_tot, st_deals, st_tot
     except Exception as e:
-        print(f"ERREUR: {e}")
+        print(f"ERREUR SCAN: {e}")
         return [], 0, [], 0
 
 def send_alert(name, price, wear, item_id, img):
     url = f"https://csfloat.com/item/{item_id}"
-    msg = f"🎯 *OFFRE TROUVÉE !*\n\n🔪 *{name}*\n💰 *{price:.2f}€*\n📉 *Float:* `{wear:.5f}`\n\n🔗 [VOIR L'ITEM]({url})"
+    msg = f"🎯 *OFFRE DÉTECTÉE (Même Offline) !*\n\n🔪 *{name}*\n💰 *{price:.2f}€*\n📉 *Float:* `{wear:.5f}`\n\n🔗 [VOIR L'ITEM]({url})"
     try:
         if img:
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", json={"chat_id": TELEGRAM_CHAT_ID, "photo": img, "caption": msg, "parse_mode": "Markdown"})
@@ -76,9 +79,10 @@ def send_alert(name, price, wear, item_id, img):
 
 def main():
     global dashboard_message_id
-    print("🚀 Sniper v38.0 (Mode Force Brute)")
+    print("🚀 Sniper v39.0 (Forceur d'annonces Offline)")
     
-    r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": "🛰️ Démarrage Scan v38.0..."})
+    # Message de démarrage
+    r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": "🛰️ Initialisation Scan Global (v39)..."})
     dashboard_message_id = r.json().get("result", {}).get("message_id")
     
     while True:
@@ -92,7 +96,7 @@ def main():
                   f"    └ En ligne : `{uv_t}` | Deals : `{len(uv_d)}` \n\n"
                   f"🔵 *Stained*\n"
                   f"    └ En ligne : `{st_t}` | Deals : `{len(st_d)}` \n\n"
-                  f"⚙️ *API Status :* `OK` (200)")
+                  f"⚙️ *API Status :* `OK (200)` | *Mode :* `Global Search` ")
         
         try:
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText", json={"chat_id": TELEGRAM_CHAT_ID, "message_id": dashboard_message_id, "text": report, "parse_mode": "Markdown"})

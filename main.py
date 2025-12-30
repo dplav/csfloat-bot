@@ -1,113 +1,128 @@
 import os
 import requests
 import time
-import sys
 from datetime import datetime
-
-sys.stdout.reconfigure(line_buffering=True)
 
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = "6116293616"
-# Nettoyage strict de la clé API
 API_KEY = os.getenv("CSFLOAT_API_KEY", "").replace('"', '').replace("'", "").strip()
 
-# Taux de conversion actualisé (Ajuste si besoin)
-USD_TO_EUR = 0.908 
+# Paramètres
+SCAN_LIMIT = 50
+CHECK_INTERVAL = 30
+last_report_id = None
+last_update_id = 0  # Pour ne pas lire deux fois le même message Telegram
 
-seen_items = set()
+# Mémoire des items (ID: {price, name})
+seen_items = {}
+
+def get_updates():
+    """Récupère les commandes /test envoyées au bot"""
+    global last_update_id
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id + 1}"
+    try:
+        r = requests.get(url, timeout=5).json()
+        for update in r.get("result", []):
+            last_update_id = update["update_id"]
+            msg = update.get("message", {}).get("text", "")
+            if msg == "/test1":
+                trigger_test(1)
+            elif msg == "/test3":
+                trigger_test(3)
+    except:
+        pass
+
+def trigger_test(count):
+    """Force une alerte sur les X premiers items du marché pour tester le son"""
+    headers = {"Authorization": API_KEY}
+    url = f"https://csfloat.com/api/v1/listings?market_hash_name=★ Butterfly Knife | Stained (Field-Tested)&limit={count}&sort_by=lowest_price"
+    try:
+        data = requests.get(url, headers=headers).json().get("data", [])
+        for i in data:
+            send_urgent_alert(i['item']['market_hash_name'], i['price']/100, i['item']['float_value'], i['id'], is_test=True)
+    except:
+        send_telegram_msg("❌ Erreur lors du test.")
 
 def get_market_data():
-    # Headers renforcés pour éviter le blocage 403
-    headers = {
-        "Authorization": API_KEY,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json"
-    }
+    global last_report_id
+    headers = {"Authorization": API_KEY, "User-Agent": "Mozilla/5.0"}
     
     targets = [
-        {"name": "★ Butterfly Knife | Ultraviolet (Field-Tested)", "max_p": 565.99, "max_f": 0.2409, "key": "UV"},
-        {"name": "★ Butterfly Knife | Stained (Field-Tested)", "max_p": 550.99, "max_f": 1.0, "key": "ST"}
+        {"name": "★ Butterfly Knife | Ultraviolet (Field-Tested)", "max_p": 565.99, "max_f": 0.2409, "id": "UV_FT"},
+        {"name": "★ Butterfly Knife | Stained (Field-Tested)", "max_p": 520.00, "max_f": 1.0, "id": "ST_FT"},
+        {"name": "★ Butterfly Knife | Stained (Well-Worn)", "max_p": 480.00, "max_f": 1.0, "id": "ST_WW"}
     ]
     
-    results = {}
+    status_data = []
+    current_scan_ids = set()
 
     for t in targets:
-        url = f"https://csfloat.com/api/v1/listings?market_hash_name={t['name']}&limit=30&sort_by=lowest_price"
-        
+        url = f"https://csfloat.com/api/v1/listings?market_hash_name={t['name']}&limit={SCAN_LIMIT}&sort_by=lowest_price&type=buy_now"
         try:
-            r = requests.get(url, headers=headers, timeout=15)
-            
+            r = requests.get(url, headers=headers, timeout=10)
             if r.status_code == 200:
                 data = r.json().get("data", [])
-                if data:
-                    # Conversion Dollar -> Euro
-                    low_p_usd = data[0]['price'] / 100
-                    low_p_eur = low_p_usd * USD_TO_EUR
-                    results[t['key']] = {"status": "OK", "count": len(data), "lowest": low_p_eur}
+                low_p = data[0]['price'] / 100 if data else 0
+                status_data.append(f"📍 {t['id']}: {len(data)} vus | Min: ${low_p}")
 
-                    for i in data:
-                        item_id = i['id']
+                for i in data:
+                    item_id = i['id']
+                    current_scan_ids.add(item_id)
+                    price = i['price'] / 100
+                    wear = i.get('item', {}).get('float_value', 0)
+
+                    if price <= t['max_p'] and wear <= t['max_f']:
                         if item_id not in seen_items:
-                            price_eur = (i['price'] / 100) * USD_TO_EUR
-                            wear = i.get('item', {}).get('float_value', 0)
-                            
-                            # Comparaison en Euros
-                            if price_eur <= t['max_p'] and wear <= t['max_f']:
-                                send_triple_alert(t['name'], price_eur, wear, item_id)
-                                seen_items.add(item_id)
-                else:
-                    results[t['key']] = {"status": "VIDE", "count": 0, "lowest": 0}
-            
-            elif r.status_code == 429:
-                results[t['key']] = {"status": "LIMITE (429)", "count": 0, "lowest": 0}
-                time.sleep(10) # Pause courte si on est bridé
+                            send_urgent_alert(t['name'], price, wear, item_id)
+                            seen_items[item_id] = {"price": price, "name": t['name']}
             else:
-                results[t['key']] = {"status": f"ERREUR {r.status_code}", "count": 0, "lowest": 0}
-                
-        except Exception as e:
-            results[t['key']] = {"status": "TIMEOUT", "count": 0, "lowest": 0}
+                status_data.append(f"❌ {t['id']}: Erreur {r.status_code}")
+        except:
+            status_data.append(f"⚠️ {t['id']}: Timeout")
 
-    send_cycle_report(results)
+    check_sold_items(current_scan_ids)
+    update_report(status_data)
 
-def send_cycle_report(res):
-    now = datetime.now().strftime('%H:%M:%S')
-    
-    # Construction du message de rapport
-    msg = f"🛰️ **MONITORING CSFLOAT v56**\n🕒 `{now}`\n\n"
-    for k, v in res.items():
-        icon = "🟣" if k == "UV" else "🔵"
-        msg += f"{icon} **{k}** : {v['status']}\n"
-        if v['status'] == "OK":
-            msg += f"   └ Vus: `{v['count']}` | Min: `{v['lowest']:.2f}€` \n"
-    
-    msg += f"\n💱 Taux: `1$ = {USD_TO_EUR}€`"
-    
-    try:
-        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                      json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown", "disable_notification": True})
-    except: pass
+def check_sold_items(current_ids):
+    sold_ids = []
+    for sid in list(seen_items.keys()):
+        if sid not in current_ids:
+            item = seen_items[sid]
+            send_telegram_msg(f"✅ **VENDU / RETIRÉ**\n{item['name']} à ${item['price']}")
+            sold_ids.append(sid)
+    for sid in sold_ids:
+        del seen_items[sid]
 
-def send_triple_alert(name, price, wear, item_id):
+def update_report(lines):
+    global last_report_id
+    text = f"📊 **STATUT SNIPER** ({datetime.now().strftime('%H:%M:%S')})\n" + "\n".join(lines)
+    text += f"\n\n⚙️ `/test1` | `/test3` pour tester le son."
+    
+    if last_report_id is None:
+        res = send_telegram_msg(text, silent=True)
+        if res: last_report_id = res.get('result', {}).get('message_id')
+    else:
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText", 
+                      json={"chat_id": TELEGRAM_CHAT_ID, "message_id": last_report_id, "text": text, "parse_mode": "Markdown"})
+
+def send_urgent_alert(name, price, wear, item_id, is_test=False):
+    prefix = "🧪 [TEST] " if is_test else "🚀 "
     url = f"https://csfloat.com/item/{item_id}"
-    alert_text = (f"🔥 **CIBLE DÉTECTÉE !** 🔥\n\n"
-                  f"🔪 {name}\n"
-                  f"💰 Prix: **{price:.2f}€**\n"
-                  f"📉 Float: `{wear:.5f}`\n\n"
-                  f"🛒 [ACHETER SUR CSFLOAT]({url})")
-    try:
-        # 3 envois successifs pour garantir la sonnerie
-        for _ in range(3):
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                          json={"chat_id": TELEGRAM_CHAT_ID, "text": alert_text, "parse_mode": "Markdown"})
-            time.sleep(0.5)
-    except: pass
+    msg = f"{prefix}**CIBLE DÉTECTÉE !**\n\n🔪 {name}\n💰 **${price:.2f}**\n📉 Float: `{wear:.5f}`\n\n🔗 [ACHETER]({url})"
+    for _ in range(3):
+        send_telegram_msg(msg)
 
-def main():
-    print("🚀 Sniper v56.0 - Opérationnel")
-    while True:
-        get_market_data()
-        time.sleep(40) # Délai de sécurité pour éviter le bannissement IP
+def send_telegram_msg(text, silent=False):
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
+                      json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_notification": silent})
+        return r.json()
+    except: return None
 
 if __name__ == "__main__":
-    main()
+    print("Sniper Pro v1.1 démarré...")
+    while True:
+        get_updates() # Vérifie si tu as envoyé /test1 ou /test3
+        get_market_data() # Analyse le marché
+        time.sleep(5) # Pause courte pour plus de réactivité sur les commandes

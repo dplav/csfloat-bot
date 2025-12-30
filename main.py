@@ -16,28 +16,29 @@ current_deals_inventory = {}
 dashboard_message_id = None
 
 def is_good_deal(name, price_eur, wear):
-    if "Field-Tested" not in name: return False
-    is_uv = "Ultraviolet" in name
-    is_stained = "Stained" in name
-    if is_uv:
-        if price_eur <= 525: return True
-        if wear <= 0.16 and price_eur <= 585: return True
-    if is_stained:
-        if price_eur <= 550: return True
+    # 1. ULTRAVIOLET FT (Max 530€ / Float < 0.24)
+    if "Ultraviolet" in name and "Field-Tested" in name:
+        if price_eur <= 530 and wear <= 0.24:
+            return True
+
+    # 2. STAINED WW (Max 490€)
+    if "Stained" in name and "Well-Worn" in name:
+        if price_eur <= 490:
+            return True
+
+    # 3. TEST : HUNTSMAN DOPPLER PHASE 3 MW (Pas de budget)
+    if "Huntsman Knife" in name and "Doppler" in name and "Minimal Wear" in name:
+        if "Phase 3" in name:
+            return True
+            
     return False
 
-def get_market_data(skin_name):
-    """Scan ciblé via paramètres de filtrage CSFloat"""
+def get_market_data(full_hash_name):
     headers = {"Authorization": CSFLOAT_API_KEY, "User-Agent": "Mozilla/5.0"}
-    
-    # On utilise market_hash_name avec le nom exact pour ne ramener QUE ce skin
-    # ★ Butterfly Knife | Ultraviolet (Field-Tested)
-    full_skin_name = f"★ Butterfly Knife | {skin_name} (Field-Tested)"
-    
     params = {
         "limit": 50,
         "sort_by": "lowest_price",
-        "market_hash_name": full_skin_name
+        "market_hash_name": full_hash_name
     }
     
     found_deals = {}
@@ -58,7 +59,7 @@ def get_market_data(skin_name):
                 if is_good_deal(name, price, wear):
                     found_deals[item_id] = f"{name} ({price}€)"
                     if item_id not in seen_items:
-                        send_telegram(f"🎯 *NOUVELLE OFFRE !*\n\n🔪 *{name}*\n💰 *{price:.2f}€*\n📉 *Float:* `{wear:.5f}`\n\n🔗 [VOIR](https://csfloat.com/item/{item_id})")
+                        send_telegram(f"🎯 *ALERTE CRITÈRE !*\n\n🔪 *{name}*\n💰 *{price:.2f}€*\n📉 *Float:* `{wear:.5f}`\n\n🔗 [VOIR](https://csfloat.com/item/{item_id})")
                         seen_items.add(item_id)
             return found_deals, total_count
         return {}, 0
@@ -75,33 +76,35 @@ def update_dashboard(text, message_id):
 
 def main():
     global current_deals_inventory, dashboard_message_id
-    print("🚀 Sniper v25.0 (Ciblage Ultra-Précis)")
-    dashboard_message_id = send_telegram("⏳ Connexion aux flux Ultraviolet et Stained...")
+    print("🚀 Sniper v26.0 (MAJ Critères + Test Huntsman)")
+    dashboard_message_id = send_telegram("⏳ Démarrage du Dashboard v26.0...")
     
     while True:
         now_str = datetime.now().strftime('%H:%M:%S')
         
-        # Scan exclusif des deux types
-        uv_deals, uv_tot = get_market_data("Ultraviolet")
-        st_deals, st_tot = get_market_data("Stained")
+        # Scans ciblés
+        uv_deals, uv_tot = get_market_data("★ Butterfly Knife | Ultraviolet (Field-Tested)")
+        st_deals, st_tot = get_market_data("★ Butterfly Knife | Stained (Well-Worn)")
+        ht_deals, ht_tot = get_market_data("★ Huntsman Knife | Doppler (Minimal Wear)")
         
-        all_deals_now = {**uv_deals, **st_deals}
+        all_deals_now = {**uv_deals, **st_deals, **ht_deals}
         
         # Détection des ventes
         for old_id, old_name in current_deals_inventory.items():
-            if old_id not in all_found_now:
+            if old_id not in all_deals_now:
                 send_telegram(f"💸 *VENDU !*\n🔪 *{old_name}*")
         
+        # Rapport
         report = (f"🖥️ *DASHBOARD SNIPER BFK*\n"
                   f"🕒 Dernier scan : `{now_str}`\n"
                   f"--- \n"
-                  f"🟣 *Ultraviolet FT*\n"
-                  f"   └ En ligne : `{uv_tot}`\n"
-                  f"   └ (`{len(uv_deals)}` bonne affaire)\n\n"
-                  f"🔵 *Stained FT*\n"
-                  f"   └ En ligne : `{st_tot}`\n"
-                  f"   └ (`{len(st_deals)}` bonne affaire)\n\n"
-                  f"🎯 *Mode :* `Scan ciblé exclusif` ")
+                  f"🟣 *UV FT (Max 530€ / Fl < 0.24)*\n"
+                  f"   └ En ligne : `{uv_tot}` | Deals : `{len(uv_deals)}` \n\n"
+                  f"🔵 *Stained WW (Max 490€)*\n"
+                  f"   └ En ligne : `{st_tot}` | Deals : `{len(st_deals)}` \n\n"
+                  f"🗡️ *TEST: Huntsman Doppler MW*\n"
+                  f"   └ En ligne : `{ht_tot}` | Deals (P3) : `{len(ht_deals)}` \n\n"
+                  f"✅ Surveillance active.")
         
         update_dashboard(report, dashboard_message_id)
         current_deals_inventory = all_deals_now

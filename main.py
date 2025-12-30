@@ -15,49 +15,62 @@ seen_items = set()
 
 def get_market_data():
     headers = {"Authorization": API_KEY, "User-Agent": "Mozilla/5.0"}
-    # On reste sur Freehand pour le test de son
-    target_name = "★ Butterfly Knife | Freehand (Field-Tested)"
-    url = f"https://csfloat.com/api/v1/listings?market_hash_name={target_name}&limit=5&sort_by=lowest_price"
     
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code == 200:
-            items = r.json().get("data", [])
-            for i in items:
-                item_id = i['id']
-                if item_id not in seen_items:
-                    price = i['price'] / 100
-                    wear = i.get('item', {}).get('float_value', 0)
-                    send_triple_alert(target_name, price, wear, item_id)
-                    seen_items.add(item_id)
-    except: pass
+    # 1. Ultraviolet FT
+    # 2. Stained (On scanne tout le Stained pour ne rien rater)
+    targets = [
+        {"name": "★ Butterfly Knife | Ultraviolet (Field-Tested)", "max_price": 568, "max_float": 0.245},
+        {"name": "★ Butterfly Knife | Stained", "max_price": 555, "max_float": 1.0}
+    ]
+    
+    for t in targets:
+        url = f"https://csfloat.com/api/v1/listings?market_hash_name={t['name']}&limit=20&sort_by=lowest_price"
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                data = r.json().get("data", [])
+                for i in data:
+                    item_id = i['id']
+                    if item_id not in seen_items:
+                        item_info = i.get('item', {})
+                        price = i['price'] / 100
+                        wear = item_info.get('float_value', 0)
+                        
+                        # Vérification des filtres
+                        if price <= t['max_price'] and wear <= t['max_float']:
+                            send_triple_alert(t['name'], price, wear, item_id)
+                            seen_items.add(item_id)
+        except: pass
 
 def send_triple_alert(name, price, wear, item_id):
     url = f"https://csfloat.com/item/{item_id}"
-    
-    # 1. Le message d'alerte principal
-    msg = (f"🚨 *ALERTE !* 🚨\n\n🔪 *{name}*\n💰 *{price:.2f}€*\n\n🚀 [ACHETER]({url})")
+    msg = (f"🚨 🚨 *APPEL DU SNIPER* 🚨 🚨\n\n"
+           f"🔪 *{name}*\n"
+           f"💰 *Prix : {price:.2f}€*\n"
+           f"📉 *Float :* `{wear:.5f}`\n\n"
+           f"🚀 [ACHETER IMMÉDIATEMENT]({url})")
     
     try:
-        # ENVOI TRIPLE POUR FORCER LE SON
-        # Message 1
+        # TRIPLE ENVOI POUR FORCER LE RÉVEIL DU TÉLÉPHONE
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                      json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown", "disable_notification": False})
+                      json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
         
-        # Message 2 (Flash)
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                      json={"chat_id": TELEGRAM_CHAT_ID, "text": "🔔 REVEILLE-TOI ! 🔔", "disable_notification": False})
+                      json={"chat_id": TELEGRAM_CHAT_ID, "text": "📢 VITE ! VITE ! VITE !"})
         
-        # Message 3 (Flash)
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                      json={"chat_id": TELEGRAM_CHAT_ID, "text": "⚠️ VITE VITE VITE ! ⚠️", "disable_notification": False})
+                      json={"chat_id": TELEGRAM_CHAT_ID, "text": "🔔 CLIQUE SUR LE LIEN AU-DESSUS !"})
     except: pass
 
 def main():
-    print("🚀 Sniper v44.2 (Triple Notification)")
+    print("🚀 Sniper v45.0 (Opérationnel : UV & Stained)")
+    # Message de confirmation
+    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
+                  json={"chat_id": TELEGRAM_CHAT_ID, "text": "🎯 Sniper v45.0 Actif !\nSurveillance : UV FT (<568€) & Stained (<555€)"})
+    
     while True:
         get_market_data()
-        time.sleep(20)
+        time.sleep(25) # Rythme soutenu pour ne pas se faire bannir mais être réactif
 
 if __name__ == "__main__":
     main()

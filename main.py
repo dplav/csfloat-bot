@@ -12,7 +12,7 @@ API_KEY = os.getenv("CSFLOAT_API_KEY", "").replace('"', '').replace("'", "").str
 SCAN_LIMIT = 50
 CHECK_INTERVAL = 30
 last_report_id = None
-last_update_id = 0  # Pour ne pas lire deux fois le même message Telegram
+last_update_id = 0 
 
 # Mémoire des items (ID: {price, name})
 seen_items = {}
@@ -20,29 +20,37 @@ seen_items = {}
 def get_updates():
     """Récupère les commandes /test envoyées au bot"""
     global last_update_id
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id + 1}"
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id + 1}&timeout=1"
     try:
         r = requests.get(url, timeout=5).json()
-        for update in r.get("result", []):
-            last_update_id = update["update_id"]
-            msg = update.get("message", {}).get("text", "")
-            if msg == "/test1":
-                trigger_test(1)
-            elif msg == "/test3":
-                trigger_test(3)
-    except:
-        pass
+        if "result" in r:
+            for update in r["result"]:
+                last_update_id = update["update_id"]
+                if "message" in update and "text" in update["message"]:
+                    msg = update["message"]["text"]
+                    print(f"Commande reçue : {msg}") # Debug
+                    if msg == "/test1":
+                        trigger_test(1)
+                    elif msg == "/test3":
+                        trigger_test(3)
+    except Exception as e:
+        print(f"Erreur getUpdates : {e}")
 
 def trigger_test(count):
-    """Force une alerte sur les X premiers items du marché pour tester le son"""
+    """Force une alerte test"""
     headers = {"Authorization": API_KEY}
-    url = f"https://csfloat.com/api/v1/listings?market_hash_name=★ Butterfly Knife | Stained (Field-Tested)&limit={count}&sort_by=lowest_price"
+    # On prend n'importe quel couteau pour le test
+    url = f"https://csfloat.com/api/v1/listings?limit={count}&sort_by=lowest_price"
     try:
-        data = requests.get(url, headers=headers).json().get("data", [])
+        r = requests.get(url, headers=headers).json()
+        data = r.get("data", [])
         for i in data:
-            send_urgent_alert(i['item']['market_hash_name'], i['price']/100, i['item']['float_value'], i['id'], is_test=True)
+            name = i['item']['market_hash_name']
+            price = i['price']/100
+            wear = i['item']['float_value']
+            send_urgent_alert(name, price, wear, i['id'], is_test=True)
     except:
-        send_telegram_msg("❌ Erreur lors du test.")
+        send_telegram_msg("❌ Erreur test API")
 
 def get_market_data():
     global last_report_id
@@ -77,7 +85,7 @@ def get_market_data():
                             send_urgent_alert(t['name'], price, wear, item_id)
                             seen_items[item_id] = {"price": price, "name": t['name']}
             else:
-                status_data.append(f"❌ {t['id']}: Erreur {r.status_code}")
+                status_data.append(f"❌ {t['id']}: ERR {r.status_code}")
         except:
             status_data.append(f"⚠️ {t['id']}: Timeout")
 
@@ -86,10 +94,9 @@ def get_market_data():
 
 def check_sold_items(current_ids):
     sold_ids = []
-    for sid in list(seen_items.keys()):
+    for sid, info in seen_items.items():
         if sid not in current_ids:
-            item = seen_items[sid]
-            send_telegram_msg(f"✅ **VENDU / RETIRÉ**\n{item['name']} à ${item['price']}")
+            send_telegram_msg(f"✅ **VENDU**\n{info['name']} à ${info['price']}")
             sold_ids.append(sid)
     for sid in sold_ids:
         del seen_items[sid]
@@ -97,11 +104,12 @@ def check_sold_items(current_ids):
 def update_report(lines):
     global last_report_id
     text = f"📊 **STATUT SNIPER** ({datetime.now().strftime('%H:%M:%S')})\n" + "\n".join(lines)
-    text += f"\n\n⚙️ `/test1` | `/test3` pour tester le son."
+    text += f"\n\n⚙️ Commandes : `/test1` | `/test3`"
     
     if last_report_id is None:
         res = send_telegram_msg(text, silent=True)
-        if res: last_report_id = res.get('result', {}).get('message_id')
+        if res and "result" in res: 
+            last_report_id = res['result']['message_id']
     else:
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText", 
                       json={"chat_id": TELEGRAM_CHAT_ID, "message_id": last_report_id, "text": text, "parse_mode": "Markdown"})
@@ -109,9 +117,10 @@ def update_report(lines):
 def send_urgent_alert(name, price, wear, item_id, is_test=False):
     prefix = "🧪 [TEST] " if is_test else "🚀 "
     url = f"https://csfloat.com/item/{item_id}"
-    msg = f"{prefix}**CIBLE DÉTECTÉE !**\n\n🔪 {name}\n💰 **${price:.2f}**\n📉 Float: `{wear:.5f}`\n\n🔗 [ACHETER]({url})"
+    msg = f"{prefix}**ALERTE !**\n\n🔪 {name}\n💰 **${price:.2f}**\n📉 Float: `{wear:.5f}`\n\n🔗 [VOIR]({url})"
     for _ in range(3):
         send_telegram_msg(msg)
+        time.sleep(0.3)
 
 def send_telegram_msg(text, silent=False):
     try:
@@ -121,8 +130,11 @@ def send_telegram_msg(text, silent=False):
     except: return None
 
 if __name__ == "__main__":
-    print("Sniper Pro v1.1 démarré...")
+    print("Démarrage v1.2...")
     while True:
-        get_updates() # Vérifie si tu as envoyé /test1 ou /test3
-        get_market_data() # Analyse le marché
-        time.sleep(5) # Pause courte pour plus de réactivité sur les commandes
+        # On vérifie les commandes plusieurs fois pendant la pause
+        for _ in range(30): 
+            get_updates()
+            time.sleep(1)
+        # Scan du marché toutes les 30 sec environ
+        get_market_data()

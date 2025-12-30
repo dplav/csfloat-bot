@@ -11,28 +11,42 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = "6116293616"
 API_KEY = os.getenv("CSFLOAT_API_KEY", "").replace('"', '').replace("'", "").strip()
 
+# Mémoire des items pour éviter les doublons
 seen_items = set()
 
 def get_market_data():
     headers = {"Authorization": API_KEY, "User-Agent": "Mozilla/5.0"}
     
+    # --- FILTRES UNIQUEMENT FIELD-TESTED ---
     targets = [
-        {"name": "★ Butterfly Knife | Ultraviolet (Field-Tested)", "max_price": 565.99, "max_float": 0.2409, "key": "UV"},
-        {"name": "★ Butterfly Knife | Stained (Field-Tested)", "max_price": 550.99, "max_float": 1.0, "key": "ST"}
+        {
+            "name": "★ Butterfly Knife | Ultraviolet (Field-Tested)", 
+            "max_p": 565.99, "max_f": 0.2409, "key": "UV FT"
+        },
+        {
+            "name": "★ Butterfly Knife | Stained (Field-Tested)", 
+            "max_p": 550.99, "max_f": 1.0, "key": "ST FT"
+        }
     ]
     
     results = {}
 
     for t in targets:
-        url = f"https://csfloat.com/api/v1/listings?market_hash_name={t['name']}&limit=15&sort_by=lowest_price"
+        # On encode l'URL pour gérer les caractères spéciaux (★, |)
+        url = f"https://csfloat.com/api/v1/listings?market_hash_name={t['name']}&limit=10&sort_by=lowest_price"
         try:
             r = requests.get(url, headers=headers, timeout=10)
             if r.status_code == 200:
                 data = r.json().get("data", [])
                 
-                # On récupère le prix le plus bas trouvé pour le rapport
-                lowest_price = data[0]['price'] / 100 if data else 0
-                results[t['key']] = {"count": len(data), "lowest": lowest_price}
+                # Récupération du prix le plus bas pour le rapport
+                low_p = data[0]['price'] / 100 if data else 0
+                results[t['key']] = {
+                    "count": len(data), 
+                    "lowest": low_p, 
+                    "filter_p": t['max_p'], 
+                    "filter_f": t['max_f']
+                }
 
                 for i in data:
                     item_id = i['id']
@@ -40,16 +54,15 @@ def get_market_data():
                         price = i['price'] / 100
                         wear = i.get('item', {}).get('float_value', 0)
                         
-                        # LOGIQUE D'ALERTE
-                        if price <= t['max_price'] and wear <= t['max_float']:
+                        # LOGIQUE D'ALERTE STRICTE
+                        if price <= t['max_p'] and wear <= t['max_f']:
                             send_triple_alert(t['name'], price, wear, item_id)
                             seen_items.add(item_id)
             else:
-                results[t['key']] = {"count": "ERR", "lowest": 0}
+                results[t['key']] = {"count": "ERR", "lowest": 0, "filter_p": t['max_p'], "filter_f": t['max_f']}
         except:
-            results[t['key']] = {"count": "TIMEOUT", "lowest": 0}
+            results[t['key']] = {"count": "TIMEOUT", "lowest": 0, "filter_p": t['max_p'], "filter_f": t['max_f']}
 
-    # ENVOI DU RAPPORT DE CYCLE
     send_cycle_report(results)
 
 def send_cycle_report(res):
@@ -57,10 +70,12 @@ def send_cycle_report(res):
     report = (f"📊 *RAPPORT D'ANALYSE CSFLOAT*\n"
               f"🕒 Heure : `{now}`\n"
               f"--- \n"
-              f"🟣 *UV FT* : `{res['UV']['count']}` items | Min : `{res['UV']['lowest']}€` \n"
-              f"🔵 *ST FT* : `{res['ST']['count']}` items | Min : `{res['ST']['lowest']}€` \n"
+              f"🟣 *{res['UV FT']['count']}* Ultraviolet FT en ligne\n"
+              f"   └ Min : `{res['UV FT']['lowest']}€` (Cible: <{res['UV FT']['filter_p']}€ / F<{res['UV FT']['filter_f']})\n\n"
+              f"🔵 *{res['ST FT']['count']}* Stained FT en ligne\n"
+              f"   └ Min : `{res['ST FT']['lowest']}€` (Cible: <{res['ST FT']['filter_p']}€)\n"
               f"--- \n"
-              f"✅ Statut : `Analyse terminée, en attente de prix cible...` ")
+              f"✅ Statut : `Scan Field-Tested uniquement` ")
     
     try:
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
@@ -69,25 +84,25 @@ def send_cycle_report(res):
 
 def send_triple_alert(name, price, wear, item_id):
     url = f"https://csfloat.com/item/{item_id}"
-    msg = (f"🚀 🚀 *CIBLE DÉTECTÉE !* 🚀 🚀\n\n"
+    msg = (f"🚀 🚀 *CIBLE FT DÉTECTÉE !* 🚀 🚀\n\n"
            f"🔪 *{name}*\n"
            f"💰 *Prix : {price:.2f}€*\n"
            f"📉 *Float :* `{wear:.5f}`\n\n"
            f"🔗 [ACHETER MAINTENANT]({url})")
     
     try:
-        # L'alerte d'achat n'est PAS silencieuse (disable_notification: False)
+        # Alertes bruyantes pour l'achat
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
                       json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown", "disable_notification": False})
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                      json={"chat_id": TELEGRAM_CHAT_ID, "text": "🔔 **BIP BIP !**", "disable_notification": False})
+                      json={"chat_id": TELEGRAM_CHAT_ID, "text": "🔔 **ALERTE ACHAT !**", "disable_notification": False})
     except: pass
 
 def main():
-    print("🚀 Sniper v48.0 (Rapports complets activés)")
+    print("🚀 Sniper v50.0 (Uniquement Field-Tested)")
     while True:
         get_market_data()
-        # On attend 45 secondes entre les rapports pour ne pas spammer ton Telegram
+        # Intervalle de 45 secondes pour le rapport
         time.sleep(45)
 
 if __name__ == "__main__":

@@ -25,14 +25,13 @@ def is_good_deal(name, price_eur, wear):
     return False
 
 def scan_specific_category(skin_name):
-    """Demande spécifiquement 100 exemplaires de ce skin précis au serveur"""
     headers = {"Authorization": CSFLOAT_API_KEY, "User-Agent": "Mozilla/5.0"}
-    # On utilise 'category=1' pour Butterfly et 'market_hash_name' pour filtrer AVANT l'envoi
-    url = f"https://csfloat.com/api/v1/listings?limit=100&sort_by=lowest_price&type=butterfly_knife&market_hash_name=★ Butterfly Knife | {skin_name} (Field-Tested)"
     
-    # Pour le Stained, on élargit si besoin
+    # Construction de l'URL de recherche précise
     if skin_name == "Stained":
-        url = f"https://csfloat.com/api/v1/listings?limit=100&sort_by=lowest_price&type=butterfly_knife&market_hash_name=★ Butterfly Knife | Stained"
+        url = "https://csfloat.com/api/v1/listings?limit=100&sort_by=lowest_price&type=butterfly_knife&market_hash_name=★ Butterfly Knife | Stained"
+    else:
+        url = f"https://csfloat.com/api/v1/listings?limit=100&sort_by=lowest_price&type=butterfly_knife&market_hash_name=★ Butterfly Knife | {skin_name} (Field-Tested)"
 
     found_deals = {}
     total_on_market = 0
@@ -57,44 +56,60 @@ def scan_specific_category(skin_name):
                         seen_items.add(item_id)
             return found_deals, total_on_market
         return {}, 0
-    except: return {}, 0
+    except:
+        return {}, 0
 
 def send_alert(name, price, wear, item_id, img_url):
     url = f"https://csfloat.com/item/{item_id}"
-    caption = (f"🎯 *OFFRE DÉTECTÉE !*\n\n🔪 *{name}*\n💰 *Prix : {price:.2f}€*\n📉 *Float :* `{wear:.5f}`\n\n🔗 [VOIR SUR CSFLOAT]({url})")
+    caption = (f"🎯 *OFFRE DÉTECTÉE !*\n\n"
+               f"🔪 *{name}*\n"
+               f"💰 *Prix : {price:.2f}€*\n"
+               f"📉 *Float :* `{wear:.5f}`\n\n"
+               f"🔗 [VOIR SUR CSFLOAT]({url})")
     try:
         if img_url:
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", json={"chat_id": TELEGRAM_CHAT_ID, "photo": img_url, "caption": caption, "parse_mode": "Markdown"}, timeout=10)
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", 
+                          json={"chat_id": TELEGRAM_CHAT_ID, "photo": img_url, "caption": caption, "parse_mode": "Markdown"}, timeout=10)
         else:
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "Markdown"}, timeout=10)
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
+                          json={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "Markdown"}, timeout=10)
     except:
-        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "Markdown"}, timeout=10)
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
+                      json={"chat_id": TELEGRAM_CHAT_ID, "text": caption, "parse_mode": "Markdown"}, timeout=10)
 
 def main():
     global current_deals_inventory, dashboard_message_id
-    print("🚀 Sniper v35.0 (Ciblage Double Canal)")
+    print("🚀 Sniper v35.1 (Correction NameError)")
     
-    r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": "🔄 Activation du Scan Double Canal..."})
+    # Init Dashboard
+    r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
+                      json={"chat_id": TELEGRAM_CHAT_ID, "text": "🔄 Initialisation du Dashboard..."})
     dashboard_message_id = r.json().get("result", {}).get("message_id")
     
     while True:
         now_str = datetime.now().strftime('%H:%M:%S')
         
-        # Requête 1 : Uniquement les UV
+        # Récupération des données
         uv_deals, uv_t = scan_specific_category("Ultraviolet")
-        # Requête 2 : Uniquement les Stained
         st_deals, st_t = scan_specific_category("Stained")
         
         all_deals_now = {**uv_deals, **st_deals}
         
-        report = (f"🖥️ *DASHBOARD SNIPER BFK*\n🕒 *Dernier scan :* `{now_str}`\n--- \n"
-                  f"🟣 *UV FT (Max 565€ / Fl < 0.24)*\n    └ En ligne : `{uv_t}` | Deals : `{len(uv_deals)}` \n\n"
-                  f"🔵 *Stained (Max 550€)*\n    └ En ligne : `{st_t}` | Deals : `{len(st_d)}` \n\n"
-                  f"🛰️ *Status :* `Scan Double Canal (200 items)`")
+        # Dashboard (Correction de la variable st_deals ici)
+        report = (f"🖥️ *DASHBOARD SNIPER BFK*\n"
+                  f"🕒 *Dernier scan :* `{now_str}`\n"
+                  f"--- \n"
+                  f"🟣 *UV FT (Max 565€ / Fl < 0.24)*\n"
+                  f"    └ En ligne : `{uv_t}` | Deals : `{len(uv_deals)}` \n\n"
+                  f"🔵 *Stained (Max 550€)*\n"
+                  f"    └ En ligne : `{st_t}` | Deals : `{len(st_deals)}` \n\n"
+                  f"✅ *Scan Double Canal Opérationnel.*")
         
         try:
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText", json={"chat_id": TELEGRAM_CHAT_ID, "message_id": dashboard_message_id, "text": report, "parse_mode": "Markdown"})
-        except: pass
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText", 
+                          json={"chat_id": TELEGRAM_CHAT_ID, "message_id": dashboard_message_id, "text": report, "parse_mode": "Markdown"})
+        except:
+            pass
         
         current_deals_inventory = all_deals_now
         time.sleep(30)

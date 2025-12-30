@@ -16,9 +16,9 @@ current_deals_inventory = {}
 dashboard_message_id = None
 
 def is_good_deal(name, price_eur, wear):
-    # 1. ULTRAVIOLET FT (Max 530€ / Float <= 0.24)
+    # 1. ULTRAVIOLET FT (Max 545€ / Float <= 0.24)
     if "Ultraviolet" in name and "Field-Tested" in name:
-        return price_eur <= 530 and wear <= 0.24
+        return price_eur <= 545 and wear <= 0.24
 
     # 2. STAINED WW (Max 490€)
     if "Stained" in name and "Well-Worn" in name:
@@ -116,3 +116,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

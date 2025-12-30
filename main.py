@@ -14,61 +14,63 @@ API_KEY = os.getenv("CSFLOAT_API_KEY", "").replace('"', '').replace("'", "").str
 seen_items = set()
 
 def get_market_data():
-    headers = {"Authorization": API_KEY, "User-Agent": "Mozilla/5.0"}
+    headers = {"Authorization": API_KEY, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
-    # TES FILTRES PRÉCIS
+    # On retire le filtre (Field-Tested) du nom pour l'API, on filtrera nous-mêmes.
+    # On utilise l'ID de définition pour le Butterfly (def_index=507)
     targets = [
-        {"name": "★ Butterfly Knife | Ultraviolet (Field-Tested)", "max_p": 565.99, "max_f": 0.2409, "key": "UV FT"},
-        {"name": "★ Butterfly Knife | Stained (Field-Tested)", "max_p": 550.99, "max_f": 1.0, "key": "ST FT"}
+        {"name": "★ Butterfly Knife | Ultraviolet", "search": "★ Butterfly Knife | Ultraviolet", "max_p": 565.99, "max_f": 0.2409, "key": "UV"},
+        {"name": "★ Butterfly Knife | Stained", "search": "★ Butterfly Knife | Stained", "max_p": 550.99, "max_f": 0.45, "key": "ST"}
     ]
     
     results = {}
 
     for t in targets:
-        # AJOUT DE currency=EUR ET type=buy_now POUR ÉVITER LES ERREURS
-        url = f"https://csfloat.com/api/v1/listings?market_hash_name={t['name']}&limit=50&sort_by=lowest_price&type=buy_now&currency=EUR"
+        # On demande 100 items d'un coup pour être sûr de tout ratisser
+        url = f"https://csfloat.com/api/v1/listings?market_hash_name={t['search']}&limit=100&sort_by=lowest_price&type=buy_now"
         
         try:
             r = requests.get(url, headers=headers, timeout=15)
             if r.status_code == 200:
                 data = r.json().get("data", [])
                 
-                # Prix min trouvé
-                low_p = data[0]['price'] / 100 if data else 0
-                results[t['key']] = {
-                    "count": len(data), 
-                    "lowest": low_p, 
-                    "filter_p": t['max_p']
-                }
-
+                valid_items = []
                 for i in data:
-                    item_id = i['id']
-                    if item_id not in seen_items:
-                        price = i['price'] / 100
-                        wear = i.get('item', {}).get('float_value', 0)
+                    item_data = i.get('item', {})
+                    wear = item_data.get('float_value', 0)
+                    price = i['price'] / 100
+                    
+                    # FILTRE MANUEL DU CODE (On ne garde que le FT : 0.15 < float < 0.38)
+                    if 0.15 <= wear <= 0.38:
+                        valid_items.append(i)
                         
-                        # ALERTE SI LE PRIX CORRESPOND
-                        if price <= t['max_p'] and wear <= (t.get('max_f') or 1.0):
-                            send_triple_alert(t['name'], price, wear, item_id)
-                            seen_items.add(item_id)
+                        # ALERTE SI DANS TES PRIX
+                        if price <= t['max_p'] and wear <= t['max_f']:
+                            if i['id'] not in seen_items:
+                                send_triple_alert(t['name'], price, wear, i['id'])
+                                seen_items.add(i['id'])
+
+                # Données pour le rapport
+                low_p = valid_items[0]['price'] / 100 if valid_items else (data[0]['price']/100 if data else 0)
+                results[t['key']] = {"count": len(valid_items), "total_api": len(data), "lowest": low_p}
             else:
-                results[t['key']] = {"count": "ERR " + str(r.status_code), "lowest": 0, "filter_p": t['max_p']}
-        except Exception as e:
-            results[t['key']] = {"count": "TIMEOUT", "lowest": 0, "filter_p": t['max_p']}
+                results[t['key']] = {"count": 0, "total_api": "ERR", "lowest": 0}
+        except:
+            results[t['key']] = {"count": 0, "total_api": "TIME", "lowest": 0}
 
     send_cycle_report(results)
 
 def send_cycle_report(res):
     now = datetime.now().strftime('%H:%M:%S')
-    report = (f"📊 *RAPPORT D'ANALYSE (FIX EUR)*\n"
-              f"🕒 Heure : `{now}`\n"
+    report = (f"🔍 *SCAN BRUT CSFLOAT*\n"
+              f"🕒 `{now}`\n"
               f"--- \n"
-              f"🟣 *UV FT* : `{res['UV FT']['count']}` items\n"
-              f"   └ Min : `{res['UV FT']['lowest']}€` (Cible: <{res['UV FT']['filter_p']}€)\n\n"
-              f"🔵 *ST FT* : `{res['ST FT']['count']}` items\n"
-              f"   └ Min : `{res['ST FT']['lowest']}€` (Cible: <{res['ST FT']['filter_p']}€)\n"
+              f"🟣 *UV* : `{res['UV']['count']}` FT trouvés (sur {res['UV']['total_api']} items)\n"
+              f"   └ Moins cher FT : `{res['UV']['lowest']}€` \n\n"
+              f"🔵 *ST* : `{res['ST']['count']}` FT trouvés (sur {res['ST']['total_api']} items)\n"
+              f"   └ Moins cher FT : `{res['ST']['lowest']}€` \n"
               f"--- \n"
-              f"⚙️ *Paramètres* : `EUR` | `Buy Now` | `FT Only` ")
+              f"📡 *Mode* : `Scan 100 + Filtre Manuel FT` ")
     
     try:
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
@@ -77,19 +79,15 @@ def send_cycle_report(res):
 
 def send_triple_alert(name, price, wear, item_id):
     url = f"https://csfloat.com/item/{item_id}"
-    msg = (f"🚀 🚀 *CIBLE TROUVÉE !* 🚀 🚀\n\n"
-           f"🔪 *{name}*\n"
-           f"💰 *Prix : {price:.2f}€*\n"
-           f"📉 *Float :* `{wear:.5f}`\n\n"
-           f"🔗 [LIEN DIRECT]({url})")
+    msg = (f"🚀 *ALERTE ACHAT IMMÉDIAT* 🚀\n\n🔪 *{name}*\n💰 *{price:.2f}€*\n📉 *Float:* `{wear:.5f}`\n\n🔗 [LIEN CSFLOAT]({url})")
     try:
         for _ in range(3):
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                          json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown", "disable_notification": False})
+                          json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
     except: pass
 
 def main():
-    print("🚀 Sniper v52.0 (Fix Devise EUR)")
+    print("🚀 Sniper v53.0 (Scan Brut 100)")
     while True:
         get_market_data()
         time.sleep(30)

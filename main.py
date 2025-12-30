@@ -16,13 +16,13 @@ current_deals_inventory = {}
 dashboard_message_id = None
 
 def is_good_deal(name, price_eur, wear):
-    # 1. ULTRAVIOLET FT (Max 560€ / Float <= 0.24)
+    # 1. ULTRAVIOLET FT (Max 565€ / Float <= 0.24)
     if "Ultraviolet" in name and "Field-Tested" in name:
-        return price_eur <= 545 and wear <= 0.24
+        return price_eur <= 565 and wear <= 0.24
 
     # 2. STAINED WW (Max 490€)
-    if "Stained" in name and "Well-Worn" in name:
-        return price_eur <= 490
+    if "Stained" in name and "Field-Tested" in name:
+        return price_eur <= 550
             
     return False
 
@@ -104,9 +104,9 @@ def main():
         report = (f"🖥️ *DASHBOARD SNIPER BFK*\n"
                   f"🕒 *Dernier scan :* `{now_str}`\n"
                   f"--- \n"
-                  f"🟣 *UV FT (Max 545€ / Fl < 0.24)*\n"
+                  f"🟣 *UV FT (Max 565€ / Fl < 0.24)*\n"
                   f"   └ En ligne : `{uv_tot}` | Deals : `{len(uv_deals)}` \n\n"
-                  f"🔵 *Stained WW (Max 490€)*\n"
+                  f"🔵 *Stained FT (Max 550€)*\n"
                   f"   └ En ligne : `{st_tot}` | Deals : `{len(st_deals)}` \n\n"
                   f"✅ *Surveillance active.*")
         
@@ -116,6 +116,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

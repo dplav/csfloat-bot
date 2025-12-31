@@ -9,7 +9,8 @@ TELEGRAM_CHAT_ID = "6116293616"
 API_KEY = os.getenv("CSFLOAT_API_KEY", "").replace('"', '').replace("'", "").strip()
 
 # Paramètres
-SCAN_INTERVAL = 60  # 1 minute pour la sécurité
+SCAN_INTERVAL = 60
+TAUX_CONVERSION = 0.92  # 1 USD = 0.92 EUR (ajustable)
 last_report_id = None
 seen_items = {}
 total_scans_done = 0
@@ -37,35 +38,47 @@ def get_market_data():
     is_blocked = False
 
     for t in targets:
+        # Ajout de type=buy_now pour exclure les enchères
         url = f"https://csfloat.com/api/v1/listings?market_hash_name={t['name']}&limit=50&sort_by=lowest_price&type=buy_now"
         try:
             r = requests.get(url, headers=headers, timeout=15)
             
-            # GESTION DU BLOCAGE (Rate Limit)
             if r.status_code == 429:
-                print("⚠️ BLOCAGE DÉTECTÉ (Erreur 429). Mise en sommeil...")
-                send_telegram_request("sendMessage", {"chat_id": TELEGRAM_CHAT_ID, "text": "🛑 **CSFloat me bloque (Trop de requêtes).**\nJe m'endors pendant 10 minutes pour débloquer l'IP."})
                 is_blocked = True
-                break # On arrête tout de suite
+                break
 
             if r.status_code == 200:
                 data = r.json().get("data", [])
                 if data:
-                    low_p, low_f = data[0]['price']/100, data[0]['item']['float_value']
-                    status_lines.append(f"✅ `{t['id']}`: {len(data)} items | **${low_p:.2f}** (f: `{low_f:.4f}`)")
+                    # On cherche le moins cher ABSOLU (pour le rapport)
+                    best_any = data[0]
+                    abs_p_usd = best_any['price']/100
+                    abs_p_eur = abs_p_usd * TAUX_CONVERSION
+                    abs_f = best_any['item']['float_value']
+                    
+                    status_lines.append(f"✅ `{t['id']}`: {len(data)} vus | **{abs_p_eur:.2f}€** (f: `{abs_f:.4f}`)")
+
+                    # On scanne les 50 pour trouver une cible qui respecte tes critères
                     for i in data:
-                        current_scan_ids.add(i['id'])
-                        if i['price']/100 <= t['max_p'] and i['item']['float_value'] <= t['max_f']:
-                            if i['id'] not in seen_items:
-                                send_urgent_alert(t['name'], i['price']/100, i['item']['float_value'], i['id'])
-                                seen_items[i['id']] = {"price": i['price']/100, "name": t['name']}
+                        item_id = i['id']
+                        current_scan_ids.add(item_id)
+                        price_usd = i['price']/100
+                        wear = i['item']['float_value']
+                        
+                        if price_usd <= t['max_p'] and wear <= t['max_f']:
+                            if item_id not in seen_items:
+                                send_urgent_alert(t['name'], price_usd, wear, item_id)
+                                seen_items[item_id] = {"price": price_usd, "name": t['name']}
+                else:
+                    status_lines.append(f"⚪ `{t['id']}`: Aucun item")
             else:
                 status_lines.append(f"❌ `{t['id']}`: Erreur {r.status_code}")
         except:
             status_lines.append(f"⚠️ `{t['id']}`: Timeout")
 
     if is_blocked:
-        time.sleep(600) # Pause de 10 minutes
+        send_telegram_request("sendMessage", {"chat_id": TELEGRAM_CHAT_ID, "text": "🛑 Rate Limit CSFloat ! Pause 10min."})
+        time.sleep(600)
         return
 
     total_scans_done += 1
@@ -73,15 +86,16 @@ def get_market_data():
     # Gestion des vendus
     sold_ids = [sid for sid in seen_items if sid not in current_scan_ids]
     for sid in sold_ids:
-        send_telegram_request("sendMessage", {"chat_id": TELEGRAM_CHAT_ID, "text": f"📦 **VENDU**\n{seen_items[sid]['name']} @ ${seen_items[sid]['price']}"})
+        send_telegram_request("sendMessage", {"chat_id": TELEGRAM_CHAT_ID, "text": f"📦 **VENDU**\n{seen_items[sid]['name']}"})
         del seen_items[sid]
 
     update_report(status_lines)
 
 def update_report(lines):
     global last_report_id
-    text = (f"🛡️ **SNIPER v2.3 (Anti-Ban)**\n"
-            f"🕒 `{datetime.now().strftime('%H:%M:%S')}` | Scans: `{total_scans_done}`\n"
+    now = datetime.now().strftime('%H:%M:%S')
+    text = (f"🛡️ **SNIPER v1.10 (EUR/USD)**\n"
+            f"🕒 `{now}` | Scans: `{total_scans_done}`\n"
             f"---\n" + "\n".join(lines))
     
     if last_report_id is None:
@@ -90,16 +104,19 @@ def update_report(lines):
     else:
         send_telegram_request("editMessageText", {"chat_id": TELEGRAM_CHAT_ID, "message_id": last_report_id, "text": text, "parse_mode": "Markdown"})
 
-def send_urgent_alert(name, price, wear, item_id):
-    msg = f"🚀 **ALERTE ACHAT** 🚀\n\n🔪 {name}\n💰 **${price:.2f}**\n📉 Float: `{wear:.5f}`\n\n🔗 https://csfloat.com/item/{item_id}"
+def send_urgent_alert(name, price_usd, wear, item_id):
+    price_eur = price_usd * TAUX_CONVERSION
+    msg = (f"🚀 **ALERTE ACHAT** 🚀\n\n"
+           f"🔪 {name}\n"
+           f"💰 **{price_eur:.2f}€** (${price_usd:.2f})\n"
+           f"📉 Float: `{wear:.5f}`\n\n"
+           f"🔗 https://csfloat.com/item/{item_id}")
     for _ in range(3):
         send_telegram_request("sendMessage", {"chat_id": TELEGRAM_CHAT_ID, "text": msg})
         time.sleep(0.5)
 
 if __name__ == "__main__":
-    print("Démarrage Sniper v2.3...")
-    send_telegram_request("sendMessage", {"chat_id": TELEGRAM_CHAT_ID, "text": "🚀 **Sniper v2.3 lancé (Intervalle 60s).**"})
-    
+    send_telegram_request("sendMessage", {"chat_id": TELEGRAM_CHAT_ID, "text": "🛠️ **Lancement v1.10 (Filtre Buy Now + EUR)**"})
     while True:
         get_market_data()
         time.sleep(SCAN_INTERVAL)

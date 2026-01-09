@@ -24,34 +24,33 @@ def send_telegram_request(method, payload):
 
 def analyze_deal(name, price_eur, wear):
     """
-    Logique de décision : Filtre les mauvaises affaires et 
-    déclenche les alertes pour les pépites.
+    Logique de décision personnalisée pour chaque item.
     """
-    if "Ultraviolet" in name:
-        # EXCEPTION : Top Float (Look proche du Minimal Wear)
-        if wear <= 0.19 and price_eur <= 565:
-            return "💎 TOP FLOAT (LOOK MW)", "✨", True
+    # --- LOGIQUE SPORT GLOVES | SLINGSHOT FT ---
+    # En FT, le Slingshot varie de 0.15 à 0.38. 
+    # Le "look" change radicalement sous 0.20.
+    if "Slingshot" in name:
+        if wear <= 0.18: # Top Float (proche MW)
+            if price_eur <= 450: return "💎 GOD TIER FLOAT/PRIX", "✨", True
+            return "✅ TOP FLOAT (MW LOOK)", "✔️", True
         
-        # LOGIQUE STANDARD UV FT (Limite 0.24)
-        if price_eur < 510:
-            return "🚀 EXCELLENTE AFFAIRE", "✨", True
-        elif 510 <= price_eur <= 535:
-            return "✅ BON PRIX (ACHAT)", "✔️", True
-        elif 536 <= price_eur <= 560:
-            return "⚖️ MOYEN", "⚠️", False
+        if price_eur < 360: # Prix plancher (Liquid)
+            return "🚀 PRIX LIQUIDE (FLIP RAPIDE)", "✨", True
+        elif 360 <= price_eur <= 390:
+            return "✅ BON PRIX", "✔️", True
         else:
-            return "❌ MAUVAIS (TROP CHER)", "🗑️", False
+            return "❌ TROP CHER (STANDART)", "🗑️", False
 
-    elif "Stained" in name:
-        # LOGIQUE STAINED FT (Prix max 520€)
-        if wear < 0.20 and price_eur <= 520:
-            return "💎 STAINED TOP LUMINOSITÉ", "✨", True
-        elif price_eur < 510:
-            return "✅ BON PRIX (FLIP)", "✔️", True
-        elif 511 <= price_eur <= 525:
-            return "⚖️ MOYEN", "⚠️", False
-        else:
-            return "❌ MAUVAIS", "🗑️", False
+    # --- LOGIQUE IMPERIAL PLAID MW ---
+    elif "Imperial Plaid" in name:
+        if wear <= 0.099:
+            if price_eur <= 750: return "💎 TOP FLOAT (ULTRA RARE)", "✨", True
+            return "✅ TOP FLOAT", "✔️", False
+        if wear < 0.125:
+            if price_eur <= 590: return "🚀 EXCELLENT PRIX/FLOAT", "✨", True
+            return "⚖️ PRIX CORRECT", "✔️", False
+        if price_eur < 555: return "🔥 PRIX LIQUIDE", "✨", True
+        return "❌ MAUVAIS (TROP USÉ/CHÈRE)", "🗑️", False
             
     return "ANALYSE...", "", False
 
@@ -59,48 +58,41 @@ def get_market_data():
     global last_report_id, total_scans_done
     headers = {"Authorization": API_KEY, "User-Agent": "Mozilla/5.0"}
     
-    # Cibles mises à jour
+    # Liste de tes cibles avec leurs limites de scan respectives
     targets = [
-        {"name": "★ Butterfly Knife | Ultraviolet (Field-Tested)", "max_p": 565.00, "max_f": 0.2400, "id": "UV_FT"},
-        {"name": "★ Butterfly Knife | Stained (Field-Tested)", "max_p": 525.00, "max_f": 0.3800, "id": "ST_FT"}
+        {"name": "★ Sport Gloves | Slingshot (Field-Tested)", "max_f": 0.38, "id": "SLING_FT"},
+        {"name": "★ Driver Gloves | Imperial Plaid (Minimal Wear)", "max_f": 0.15, "id": "PLAID_MW"}
     ]
     
     status_lines = []
 
     for t in targets:
-        url = f"https://csfloat.com/api/v1/listings?market_hash_name={t['name']}&limit=30&sort_by=lowest_price&type=buy_now"
+        url = f"https://csfloat.com/api/v1/listings?market_hash_name={t['name']}&limit=10&sort_by=lowest_price&type=buy_now"
         try:
             r = requests.get(url, headers=headers, timeout=15)
             if r.status_code == 200:
                 data = r.json().get("data", [])
-                
-                # Filtrage selon tes critères de float
-                valid_items = [i for i in data if i['item']['float_value'] <= t['max_f']]
-                
-                if valid_items:
-                    # Tri pour trouver la meilleure offre (Prix puis Float)
-                    valid_items.sort(key=lambda x: (x['price'], x['item']['float_value']))
-                    best_item = valid_items[0]
-                    
-                    p_eur = (best_item['price'] / 100) * current_rate
-                    f_raw = best_item['item']['float_value']
-                    i_id = best_item['id']
-                    
-                    # Analyse du Deal
-                    status_text, emoji, is_alert = analyze_deal(t['name'], p_eur, f_raw)
-                    
-                    # Envoi de l'alerte urgente (3x notification)
-                    if is_alert and i_id not in seen_items:
-                        send_urgent_alert(t['name'], p_eur, f_raw, i_id, status_text)
-                        seen_items[i_id] = {"p": p_eur}
+                if data:
+                    # On prend le moins cher qui respecte le float max
+                    valid = [i for i in data if i['item']['float_value'] <= t['max_f']]
+                    if valid:
+                        best = valid[0]
+                        p_eur = (best['price'] / 100) * current_rate
+                        f_raw = best['item']['float_value']
+                        i_id = best['id']
+                        
+                        status_text, emoji, is_alert = analyze_deal(t['name'], p_eur, f_raw)
+                        
+                        if is_alert and i_id not in seen_items:
+                            send_urgent_alert(t['name'], p_eur, f_raw, i_id, status_text)
+                            seen_items[i_id] = {"p": p_eur}
 
-                    # Ligne pour le Dashboard
-                    status_lines.append(
-                        f"🎯 `{t['id']}`: {len(valid_items)} valides\n"
-                        f"└ [**{p_eur:.2f}€**](https://csfloat.com/item/{i_id}) | f: `{f_raw:.4f}` | {emoji} {status_text}"
-                    )
-                else:
-                    status_lines.append(f"❌ `{t['id']}`: Aucun (f < {t['max_f']})")
+                        status_lines.append(
+                            f"🎯 `{t['id']}`: [**{p_eur:.2f}€**](https://csfloat.com/item/{i_id}) | f: `{f_raw:.4f}`\n"
+                            f"└ {emoji} {status_text}"
+                        )
+                    else: status_lines.append(f"❌ `{t['id']}`: Aucun float valide")
+                else: status_lines.append(f"❌ `{t['id']}`: Vide")
         except:
             status_lines.append(f"📡 `{t['id']}`: Erreur Connexion")
 
@@ -109,13 +101,11 @@ def get_market_data():
 
 def update_report(lines):
     global last_report_id
-    text = (f"🛡️ **SNIPER INTELLIGENT v1.30**\n"
-            f"🕒 Scan : `{datetime.now().strftime('%H:%M:%S')}`\n"
-            f"📈 Scans : `{total_scans_done}` | Taux : `{current_rate}`\n"
+    text = (f"🧤 **MULTI-SNIPER v2.0**\n"
+            f"🕒 `{datetime.now().strftime('%H:%M:%S')}` | Scans : `{total_scans_done}`\n"
             f"--- \n" + "\n".join(lines))
     
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
-    
     if last_report_id:
         send_telegram_request("editMessageText", {**payload, "message_id": last_report_id})
     else:
@@ -123,15 +113,14 @@ def update_report(lines):
         if res: last_report_id = res.get('result', {}).get('message_id')
 
 def send_urgent_alert(name, p_eur, wear, item_id, label):
-    msg = (f"{label}\n\n"
-           f"🔪 {name}\n"
-           f"💰 **{p_eur:.2f}€**\n"
-           f"📉 Float: `{wear:.10f}`\n"
-           f"🔗 [SNIPER MAINTENANT](https://csfloat.com/item/{item_id})")
+    msg = (f"🚨 {label} 🚨\n\n"
+           f"🧤 {name}\n"
+           f"💰 **{p_eur:.2f}€** | Float: `{wear:.10f}`\n"
+           f"🔗 [ACHETER](https://csfloat.com/item/{item_id})")
     
-    for _ in range(3):
+    for _ in range(3): # Les 3 notifications pour être sûr de ne pas rater le deal
         send_telegram_request("sendMessage", {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
-        time.sleep(0.3)
+        time.sleep(0.4)
 
 if __name__ == "__main__":
     while True:
